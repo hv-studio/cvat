@@ -243,8 +243,8 @@ docker image inspect \
 ```bash
 docker compose \
   -f docker-compose.yml \
-  -f docker-compose.override.yml \
   -f components/serverless/docker-compose.serverless.yml \
+  -f docker-compose.override.yml \
   up -d
 ```
 
@@ -397,10 +397,16 @@ docker buildx history logs "$sam_build_ref" --progress plain
 ```bash
 (
   set -euo pipefail
-  if [ -z "${SAM_WEIGHTS_DIR:-}" ]; then
-    source .env.sam
+  if [ -f .env.sam ]; then
+    if [ -z "${SAM_WEIGHTS_DIR:-}" ]; then
+      SAM_WEIGHTS_DIR=$(source .env.sam; printf '%s' "${SAM_WEIGHTS_DIR:-}")
+    fi
+    if [ -z "${SAM_RESTART_POLICY:-}" ]; then
+      SAM_RESTART_POLICY=$(source .env.sam; printf '%s' "${SAM_RESTART_POLICY:-}")
+    fi
   fi
-  export SAM_WEIGHTS_DIR
+  SAM_RESTART_POLICY=${SAM_RESTART_POLICY:-always}
+  export SAM_WEIGHTS_DIR SAM_RESTART_POLICY
 
   sam_runtime_dir="$(mktemp -d "${TMPDIR:-/tmp}/cvat-sam-runtime.XXXXXX")"
   trap 'rm -rf -- "$sam_runtime_dir"' EXIT
@@ -425,6 +431,10 @@ config['metadata']['namespace'] = 'nuclio'
 spec = config['spec']
 del spec['build']
 spec['image'] = 'cvat.pth.facebookresearch.sam.vit_h:latest-gpu'
+restart_policy = os.environ.get('SAM_RESTART_POLICY', 'always')
+if restart_policy not in {'no', 'always', 'unless-stopped', 'on-failure'}:
+    sys.exit('SAM_RESTART_POLICY 无效。')
+spec['platform']['attributes']['restartPolicy']['name'] = restart_policy
 for entry in spec['volumes']:
     if entry['volume']['name'] == 'sam-weights':
         entry['volume']['hostPath']['path'] = str(weights_dir)
@@ -498,8 +508,8 @@ docker start nuclio-nuclio-pth-facebookresearch-sam-vit-h
 docker stop nuclio-nuclio-pth-facebookresearch-sam-vit-h
 docker compose \
   -f docker-compose.yml \
-  -f docker-compose.override.yml \
   -f components/serverless/docker-compose.serverless.yml \
+  -f docker-compose.override.yml \
   stop
 ```
 
@@ -507,7 +517,41 @@ docker compose \
 `stop` 保留数据。**不要用 `down -v` 或 `docker volume prune` 排查安装问题**，这些操作可能删除标注数据。
 任务迁移使用 CVAT 的备份、导出功能；镜像归档不代替数据备份。
 
-### 8.2 导出完整 SAM 镜像包
+### 8.2 关闭开机自动启动（可选）
+
+默认重启策略为 `always`，Docker 启动时会恢复容器。需要完全手动启动时，
+在 `docker-compose.override.yml` 中为每个服务设置 `restart: "no"`。
+下面的命令保留其他本地配置，并更新所有 CVAT/Nuclio 服务：
+
+```bash
+/usr/bin/python3 - <<'PY'
+from pathlib import Path
+import yaml
+
+path = Path('docker-compose.override.yml')
+config = yaml.safe_load(path.read_text()) or {}
+services = config.setdefault('services', {})
+for filename in ('docker-compose.yml', 'components/serverless/docker-compose.serverless.yml'):
+    for name in yaml.safe_load(Path(filename).read_text())['services']:
+        services.setdefault(name, {})['restart'] = 'no'
+path.write_text(yaml.safe_dump(config, sort_keys=False))
+PY
+```
+
+启动时将 `docker-compose.override.yml` 放在所有 `-f` 参数的最后，以覆盖 serverless 配置。
+同时在 `.env.sam` 中设置 `SAM_RESTART_POLICY=no`，使后续两条 SAM 部署路线使用手动启动策略。
+已有容器可直接更新策略，无需停止服务：
+
+```bash
+docker ps -aq --filter label=com.docker.compose.project=cvat \
+  | xargs -r docker update --restart=no
+docker update --restart=no nuclio-nuclio-pth-facebookresearch-sam-vit-h
+```
+
+未部署 SAM 时跳过最后一条。Docker 服务本身可以继续随系统启动；上述 CVAT 和 SAM 容器会等待手动启动。
+`no` 同时关闭容器异常退出后的自动重启，启动与关闭命令仍使用第 8.1 节所述方式。
+
+### 8.3 导出完整 SAM 镜像包
 
 验证部署成功后，在项目根目录执行；如需保留旧归档，先更换输出文件名：
 
@@ -529,7 +573,7 @@ docker save -o images/cvat-sam-nuclio-amd64.tar \
 使用 `docker save/load`，不要使用 `docker export/import`。镜像不包含挂载的权重或函数注册状态，
 接收者仍需配置自己的 `.env.sam` 并部署。完全离线安装还需另行准备 Compose 所需全部镜像及主机安装包。
 
-### 8.3 在 Google Cloud Shell 下载 GCR 辅助包
+### 8.4 在 Google Cloud Shell 下载 GCR 辅助包
 
 无法直接访问 GCR，且没有现成辅助包时，在 **Google Cloud Shell** 执行：
 

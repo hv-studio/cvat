@@ -13,6 +13,11 @@ The repository ignores `.env.sam`. It is sourced as a shell file; quote paths
 containing spaces. A non-empty `SAM_WEIGHTS_DIR` environment variable takes
 precedence over this file.
 
+Set `SAM_RESTART_POLICY=no` in `.env.sam` to require manual startup after a host
+or Docker restart. The default is `always`. This setting takes effect on deployment;
+for an existing container, apply it without redeploying with
+`docker update --restart=no nuclio-nuclio-pth-facebookresearch-sam-vit-h`.
+
 The deployment script uses host Python 3 (standard library only) to validate
 the directory and checkpoint, then render the GPU configuration into a temporary
 directory. The temporary configuration is removed on exit, including deployment

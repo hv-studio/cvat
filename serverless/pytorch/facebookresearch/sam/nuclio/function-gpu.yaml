@@ -94,6 +94,6 @@ spec:
   platform:
     attributes:
       restartPolicy:
-        name: always
+        name: ${SAM_RESTART_POLICY}
         maximumRetryCount: 3
       mountMode: volume

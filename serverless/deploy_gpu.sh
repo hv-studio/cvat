@@ -27,9 +27,14 @@ do
     deploy_config="$func_config"
 
     if grep -qF '${SAM_WEIGHTS_DIR}' "$func_config"; then
-        # An explicit environment variable takes precedence over local settings.
-        if [ -z "${SAM_WEIGHTS_DIR:-}" ] && [ -f "$SCRIPT_DIR/../.env.sam" ]; then
-            source "$SCRIPT_DIR/../.env.sam"
+        # Explicit environment variables take precedence over local settings.
+        if [ -f "$SCRIPT_DIR/../.env.sam" ]; then
+            if [ -z "${SAM_WEIGHTS_DIR:-}" ]; then
+                SAM_WEIGHTS_DIR=$(source "$SCRIPT_DIR/../.env.sam"; printf '%s' "${SAM_WEIGHTS_DIR:-}")
+            fi
+            if [ -z "${SAM_RESTART_POLICY:-}" ]; then
+                SAM_RESTART_POLICY=$(source "$SCRIPT_DIR/../.env.sam"; printf '%s' "${SAM_RESTART_POLICY:-}")
+            fi
         fi
         if [ -z "${SAM_WEIGHTS_DIR:-}" ]; then
             echo "Set SAM_WEIGHTS_DIR or copy serverless/pytorch/facebookresearch/sam/weights.env.example to .env.sam and configure it." >&2
@@ -40,7 +45,8 @@ do
             rendered_config_dir="$(mktemp -d "${TMPDIR:-/tmp}/cvat-nuclio.XXXXXX")"
         fi
         deploy_config="$rendered_config_dir/function-gpu.yaml"
-        SAM_WEIGHTS_DIR="$SAM_WEIGHTS_DIR" python3 - "$func_config" "$deploy_config" <<'PY'
+        SAM_WEIGHTS_DIR="$SAM_WEIGHTS_DIR" SAM_RESTART_POLICY="${SAM_RESTART_POLICY:-always}" \
+            python3 - "$func_config" "$deploy_config" <<'PY'
 import json
 import os
 from pathlib import Path
@@ -54,8 +60,12 @@ if not checkpoint.is_file() or not os.access(checkpoint, os.R_OK):
     sys.exit(f"SAM checkpoint is missing or unreadable: {checkpoint}")
 
 template = Path(sys.argv[1]).read_text(encoding="utf-8")
+restart_policy = os.environ["SAM_RESTART_POLICY"]
+if restart_policy not in {"no", "always", "unless-stopped", "on-failure"}:
+    sys.exit("SAM_RESTART_POLICY must be no, always, unless-stopped, or on-failure.")
 # JSON string quoting also produces a valid YAML scalar for paths with spaces or quotes.
 rendered = template.replace("${SAM_WEIGHTS_DIR}", json.dumps(str(weights_dir)))
+rendered = rendered.replace("${SAM_RESTART_POLICY}", json.dumps(restart_policy))
 Path(sys.argv[2]).write_text(rendered, encoding="utf-8")
 PY
     fi
