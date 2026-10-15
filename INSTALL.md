@@ -1,6 +1,6 @@
 # CVAT 安装指南
 
-本文介绍在 Ubuntu / Kubuntu 22.04、24.04（x86_64 / amd64）上安装 CVAT，并接入 SAM1 ViT-H。
+本文介绍在 Ubuntu / Kubuntu 22.04、24.04（x86_64 / amd64）上安装 CVAT，并接入 SAM ViT-B/L/H。
 普通标注功能不需要 GPU；SAM GPU 部署需要 NVIDIA 显卡、兼容驱动和 NVIDIA Container Toolkit。
 已有可用环境时，可跳过对应步骤。
 
@@ -35,13 +35,14 @@ SAM 部署有两条路线，镜像准备与部署步骤应选择同一路线：
 | --- | --- |
 | `nuclio-alpine-3.20.tar` | 路线 A：Nuclio 本地存储辅助镜像 |
 | `uhttpc-0.0.3-amd64.tar` | 路线 A：构建时使用的健康检查辅助镜像 |
-| `cvat-sam-nuclio-amd64.tar` | 路线 B：SAM 运行镜像、Nuclio Dashboard 和 Alpine 辅助镜像 |
+| `cvat-sam-nuclio-amd64.tar` | 路线 B：SAM、配套 CVAT UI、Nuclio Dashboard 和 Alpine 镜像 |
 
-路线 B 只需下载第三个包。上述包适用于 `linux/amd64`，**不含 SAM 权重、CVAT 主服务镜像或标注数据**。
+路线 B 只需下载第三个包。上述包适用于 `linux/amd64`，**不含 checkpoint、ONNX decoder、CVAT 后端镜像或标注数据**。
+旧版完整包可能缺少配套 UI 和自动选型代码，使用前核对发布说明；当前完整包的导出方式见第 8.3 节。
 从空白系统安装仍需准备 Docker、驱动等依赖；权重见第 5 节。请为镜像、构建缓存、权重和数据集预留足够磁盘空间。
 
 命令使用 Bash 执行，除系统安装外均在项目根目录运行。多行命令可整块复制；`sudo` 输入密码时不显示字符属于正常现象。
-`$HOME/Projects` 和 `$HOME/weights/sam` 仅为可替换的目录示例。个人路径写入被 Git 忽略的本地配置，不写入仓库模板。
+`$HOME/Projects` 和项目内 `weights/sam` 仅为可替换的目录示例。个人路径写入被 Git 忽略的本地配置，不写入仓库模板。
 
 ## 2. 安装 Docker
 
@@ -228,12 +229,13 @@ Dashboard 提供模型管理服务。构建配置使用 `noBaseImagesPull: true`
 docker load -i images/cvat-sam-nuclio-amd64.tar
 docker image inspect \
   cvat.pth.facebookresearch.sam.vit_h:latest-gpu \
+  cvat/ui:dev \
   quay.io/nuclio/dashboard:1.16.3-amd64 \
   gcr.io/iguazio/alpine:3.20 \
   --format '{{join .RepoTags ", "}}  {{.Os}}/{{.Architecture}}'
 ```
 
-确认三个镜像均存在，架构为 `linux/amd64`。此路线不需要单独准备 `uhttpc` 或 handler-builder 镜像。
+确认四个镜像均存在，架构为 `linux/amd64`。此路线不需要单独准备 `uhttpc` 或 handler-builder 镜像。
 完成第 4～5 节后，执行第 6.2 节的免构建部署。
 
 ## 4. 启动 CVAT
@@ -251,7 +253,8 @@ docker compose \
 `up -d` 创建并在后台运行服务，自动下载缺少的 CVAT、数据库等镜像。
 仅使用普通标注功能时，也可按此方式启动，跳过后续 SAM 步骤。
 
-默认使用 `cvat/server:dev` 和 `cvat/ui:dev` 发布镜像；本地源码修改不会自动进入这些镜像。
+默认使用本地的 `cvat/server:dev` 和 `cvat/ui:dev`，缺失时拉取发布镜像；本地源码修改不会自动进入镜像。
+路线 B 导入的 `cvat/ui:dev` 含配套 SAM 插件，不要再用在线 `pull` 覆盖它。
 需要运行修改后的前后端时，参照[源码构建说明](site/content/en/docs/administration/community/basics/installation.md#how-to-pullbuildupdate-cvat-images)。
 使用其他发布版本时，保持源码、server 和 UI 版本配套。
 
@@ -325,17 +328,32 @@ GitHub 无法访问时，可在其他机器下载同一文件后复制过来，�
 
 ### 5.3 SAM 权重与路径
 
-使用 **Meta 原版 SAM1 ViT-H checkpoint**，文件名设为 `sam-h.pth`。例如下载到用户目录：
+使用 **Meta 原版 SAM checkpoint**，按需下载一种或多种：
+
+| 类型 | 建议文件名 | 官方下载 |
+| --- | --- | --- |
+| `vit_b` | `sam-b.pth` | [ViT-B](https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth) |
+| `vit_l` | `sam-l.pth` | [ViT-L](https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth) |
+| `vit_h` | `sam-h.pth` | [ViT-H](https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth) |
+
+例如在项目根目录下载 ViT-B：
 
 ```bash
-mkdir -p "$HOME/weights/sam"
+mkdir -p weights/sam
 curl -fL --retry 3 -C - \
-  https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth \
-  -o "$HOME/weights/sam/sam-h.pth"
+  https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth \
+  -o weights/sam/sam-b.pth
 ```
 
 已有正确权重时跳过下载。Transformers 的 `model.safetensors`、其他封装的 `.pt`、SAM2/SAM3 权重不能直接替代。
-前端解码器与 ViT-H 配套，不能只更换 ViT-B/L 权重。
+在权重目录创建 `cvat.json`，指定类型和相对该目录的 checkpoint 路径：
+
+```json
+{
+  "checkpoint": "sam-b.pth",
+  "type": "vit_b"
+}
+```
 
 在项目根目录创建并编辑 `.env.sam`：
 
@@ -346,10 +364,12 @@ fi
 nano .env.sam
 ```
 
-以上面的下载位置为例，配置为：
+将 `SAM_WEIGHTS_DIR` 设置为权重目录的绝对路径，例如用 `realpath weights/sam` 获取路径后填入。
+配置格式如下（替换示例路径）：
 
 ```bash
-SAM_WEIGHTS_DIR="$HOME/weights/sam"
+SAM_WEIGHTS_DIR="/absolute/path/to/cvat/weights/sam"
+SAM_RESTART_POLICY=no
 ```
 
 该值应解析为权重所在目录的绝对路径，不包含文件名；路径含空格时使用引号。保存后检查：
@@ -357,13 +377,38 @@ SAM_WEIGHTS_DIR="$HOME/weights/sam"
 ```bash
 (
   source .env.sam
-  ls -lh "$SAM_WEIGHTS_DIR/sam-h.pth"
+  cat "$SAM_WEIGHTS_DIR/cvat.json"
+  ls -lh "$SAM_WEIGHTS_DIR"/*.pth
 )
 ```
 
 `.env.sam` 被 Git 忽略，部署脚本将目录只读挂载到 `/opt/weights/sam`。
 已导出的非空 `SAM_WEIGHTS_DIR` 环境变量优先于文件；执行 `unset SAM_WEIGHTS_DIR` 可恢复使用文件配置。
 模型运行期间需保持该目录可访问，无需修改仓库中的权重路径模板。
+
+### 5.4 配套 decoder 与前端
+
+每种模型类型需要对应的 ONNX decoder。按 [SAM 导出说明](serverless/pytorch/facebookresearch/sam/README.md#export-matching-decoders)
+生成到权重目录的 `onnx/` 下；已有 SAM 镜像时可用临时容器导出，否则先准备说明中列出的 Python 依赖。
+文件名为 `decoder-vit_b.onnx`、`decoder-vit_l.onnx` 或 `decoder-vit_h.onnx`，前端根据服务返回的
+`model_type` 自动选择。同一类型的 checkpoint 共用 decoder，不比较权重内容。
+
+**SAM 后端和 CVAT UI 均须使用本仓库配套代码。** 旧镜像包和官方发布的 UI 不包含此自动选型协议，
+仅导入旧包或挂载 ONNX 不会更新代码。首次安装需准备对应版本的镜像；UI 源码构建见第 4 节链接。
+
+生成 decoder 后，启动 CVAT 时增加静态文件挂载：
+
+```bash
+docker compose --env-file .env.sam \
+  -f docker-compose.yml \
+  -f components/serverless/docker-compose.serverless.yml \
+  -f components/serverless/docker-compose.sam.yml \
+  -f docker-compose.override.yml \
+  up -d
+```
+
+此配置仅向浏览器提供 `onnx/`，不暴露 checkpoint。若还在 `.env` 设置了 `CVAT_HOST` 等变量，
+将 `--env-file .env.sam` 改为 `--env-file .env --env-file .env.sam`。
 
 ## 6. 部署 SAM
 
@@ -393,6 +438,7 @@ docker buildx history logs "$sam_build_ref" --progress plain
 
 完成第 3.3 节的导入后，使用以下命令。它从仓库模板生成临时配置，保留模型元数据、GPU 和权重挂载，
 移除构建项，再运行已导入的镜像。**此路线不运行 `deploy_gpu.sh`。**
+镜像必须包含第 5.4 节所述的配套后端；固定 ViT-H 版本的旧归档不能直接用于自动切换。
 
 ```bash
 (
@@ -418,23 +464,14 @@ from pathlib import Path
 
 import yaml
 
-weights_dir = Path(os.environ['SAM_WEIGHTS_DIR'])
-if not weights_dir.is_absolute() or not weights_dir.is_dir():
-    sys.exit('SAM_WEIGHTS_DIR 必须指向存在的绝对目录。')
-checkpoint = weights_dir / 'sam-h.pth'
-if not checkpoint.is_file() or not os.access(checkpoint, os.R_OK):
-    sys.exit(f'找不到可读的权重文件：{checkpoint}')
-
+weights_dir = Path(os.environ['SAM_WEIGHTS_DIR']).resolve(strict=True)
 template = Path('serverless/pytorch/facebookresearch/sam/nuclio/function-gpu.yaml')
 config = yaml.safe_load(template.read_text(encoding='utf-8'))
 config['metadata']['namespace'] = 'nuclio'
 spec = config['spec']
 del spec['build']
 spec['image'] = 'cvat.pth.facebookresearch.sam.vit_h:latest-gpu'
-restart_policy = os.environ.get('SAM_RESTART_POLICY', 'always')
-if restart_policy not in {'no', 'always', 'unless-stopped', 'on-failure'}:
-    sys.exit('SAM_RESTART_POLICY 无效。')
-spec['platform']['attributes']['restartPolicy']['name'] = restart_policy
+spec['platform']['attributes']['restartPolicy']['name'] = os.environ['SAM_RESTART_POLICY']
 for entry in spec['volumes']:
     if entry['volume']['name'] == 'sam-weights':
         entry['volume']['hostPath']['path'] = str(weights_dir)
@@ -489,14 +526,15 @@ docker exec nuclio-nuclio-pth-facebookresearch-sam-vit-h \
 操作说明见 [AI Tools](site/content/en/docs/annotation/auto-annotation/ai-tools.md)。
 
 YTVIS 数据需先转换为受支持的逐帧格式，例如 COCO instances；上传图片后，通过 **Import annotations / COCO 1.0**
-导入对应标注，保持文件名和标签一致。SAM1 不自动维护跨帧身份，需要另行保存视频、帧和实例 ID 的映射。
+导入对应标注，保持文件名和标签一致。SAM 不自动维护跨帧身份，需要另行保存视频、帧和实例 ID 的映射。
 先验证一个小任务的导入、编辑、导出，再批量处理。
 
 ## 8. 日常管理与镜像分享
 
 ### 8.1 启动、停止与数据
 
-恢复服务时执行第 4 节的 `up -d`，并按需启动已部署的 SAM 容器：
+恢复服务时执行第 4 节的 `up -d`；使用配套 decoder 时改用第 5.4 节命令，以保留静态文件挂载。
+然后按需启动已部署的 SAM 容器：
 
 ```bash
 docker start nuclio-nuclio-pth-facebookresearch-sam-vit-h
@@ -516,6 +554,15 @@ docker compose \
 未部署 SAM 时跳过针对该容器的命令。SAM 函数由 Nuclio 创建，需要单独管理；正常启动无需重新构建。
 `stop` 保留数据。**不要用 `down -v` 或 `docker volume prune` 排查安装问题**，这些操作可能删除标注数据。
 任务迁移使用 CVAT 的备份、导出功能；镜像归档不代替数据备份。
+
+切换 SAM 模型时，先确认对应 decoder 已导出，再修改权重目录中的 `cvat.json`，执行以下命令并刷新网页：
+
+```bash
+docker restart nuclio-nuclio-pth-facebookresearch-sam-vit-h
+```
+
+配置在 SAM 初始化时读取。此流程要求前后端已完成第 5.4 节的代码和挂载配置，不会自动更新旧容器内的代码。
+若替换了同名 ONNX 文件，需强制刷新网页以更新浏览器缓存。
 
 ### 8.2 关闭开机自动启动（可选）
 
@@ -559,6 +606,7 @@ docker update --restart=no nuclio-nuclio-pth-facebookresearch-sam-vit-h
 mkdir -p images
 docker save -o images/cvat-sam-nuclio-amd64.tar \
   cvat.pth.facebookresearch.sam.vit_h:latest-gpu \
+  cvat/ui:dev \
   quay.io/nuclio/dashboard:1.16.3-amd64 \
   gcr.io/iguazio/alpine:3.20
 (
@@ -569,6 +617,7 @@ docker save -o images/cvat-sam-nuclio-amd64.tar \
 
 分享镜像包、校验文件、对应版本的项目源码和权重下载地址，同时注明镜像架构及 PyTorch/CUDA 兼容要求。
 接收者若拿到校验文件，可在 `images/` 中执行 `sha256sum -c cvat-sam-nuclio-amd64.tar.sha256`，再按路线 B 部署。
+另行提供权重目录中的 `cvat.json` 和 `onnx/`，或让接收者按第 5 节生成 decoder。
 
 使用 `docker save/load`，不要使用 `docker export/import`。镜像不包含挂载的权重或函数注册状态，
 接收者仍需配置自己的 `.env.sam` 并部署。完全离线安装还需另行准备 Compose 所需全部镜像及主机安装包。
@@ -668,9 +717,9 @@ nuctl delete function pth-facebookresearch-sam-vit-h \
 | 主机正常、容器看不到 GPU | Container Toolkit 和 Docker runtime 配置 |
 | `CUDA driver version is insufficient` | 驱动是否兼容镜像中的 CUDA 版本 |
 | `CUDA out of memory` | 可用显存和其他 GPU 程序；ViT-H 需要足够显存 |
-| 权重不存在或 `state_dict` 不匹配 | `.env.sam`、目录权限、`sam-h.pth` 文件名及 Meta ViT-H 格式 |
+| 权重不存在或 `state_dict` 不匹配 | `.env.sam`、目录权限、`cvat.json` 的 checkpoint/type 与 Meta SAM 格式是否对应 |
 | UI 无 Segment Anything | 启动命令是否包含 serverless 配置，函数是否在项目 `cvat` 中为 `ready`，网络是否为 `cvat_cvat` |
-| 浏览器 SAM 解码失败 | 前后端版本、固定函数名及 `/assets/decoder.onnx` 是否正确加载 |
+| 浏览器 SAM 解码失败 | 前后端是否包含自动选型代码、固定函数名是否正确、`/assets/sam/decoder-<type>.onnx` 是否已导出并挂载；替换同名文件后强制刷新 |
 
 修改权重目录后需要重新部署，单纯重启容器不会更新挂载配置。
 COCO 导入失败则检查格式、文件结构和掩码编码；该问题独立于 SAM 部署，不能通过重命名原始 YTVIS 文件解决。

@@ -49,20 +49,12 @@ do
             python3 - "$func_config" "$deploy_config" <<'PY'
 import json
 import os
-from pathlib import Path
 import sys
+from pathlib import Path
 
-weights_dir = Path(os.environ["SAM_WEIGHTS_DIR"])
-if not weights_dir.is_absolute() or not weights_dir.is_dir():
-    sys.exit("SAM_WEIGHTS_DIR must be an existing absolute directory path.")
-checkpoint = weights_dir / "sam-h.pth"
-if not checkpoint.is_file() or not os.access(checkpoint, os.R_OK):
-    sys.exit(f"SAM checkpoint is missing or unreadable: {checkpoint}")
-
+weights_dir = Path(os.environ["SAM_WEIGHTS_DIR"]).resolve(strict=True)
 template = Path(sys.argv[1]).read_text(encoding="utf-8")
 restart_policy = os.environ["SAM_RESTART_POLICY"]
-if restart_policy not in {"no", "always", "unless-stopped", "on-failure"}:
-    sys.exit("SAM_RESTART_POLICY must be no, always, unless-stopped, or on-failure.")
 # JSON string quoting also produces a valid YAML scalar for paths with spaces or quotes.
 rendered = template.replace("${SAM_WEIGHTS_DIR}", json.dumps(str(weights_dir)))
 rendered = rendered.replace("${SAM_RESTART_POLICY}", json.dumps(restart_policy))

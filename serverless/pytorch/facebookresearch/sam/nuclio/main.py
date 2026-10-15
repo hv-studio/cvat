@@ -2,10 +2,12 @@
 #
 # SPDX-License-Identifier: MIT
 
-import json
 import base64
-from PIL import Image
 import io
+import json
+
+from PIL import Image
+
 from model_handler import ModelHandler
 
 
@@ -27,9 +29,8 @@ def handler(context, event):
     return context.Response(
         body=json.dumps(
             {
-                "blob": base64.b64encode(
-                    features.cpu().numpy() if features.is_cuda else features.numpy()
-                ).decode(),
+                "model_type": context.user_data.model.model_type,
+                "blob": base64.b64encode(features.cpu().numpy()).decode(),
             }
         ),
         headers={},

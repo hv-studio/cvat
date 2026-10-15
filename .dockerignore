@@ -16,4 +16,6 @@
 /changelog.d
 /cvat-cli
 /profiles
+/weights
+/images
 **/__pycache__

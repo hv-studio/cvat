@@ -73,9 +73,13 @@ module.exports = (env, argv = {}) => {
                 webSocketURL: 'ws://0.0.0.0:0/ws',
             },
             historyApiFallback: true,
-            static: {
-                directory: path.join(__dirname, 'dist'),
-            },
+            static: [
+                { directory: path.join(__dirname, 'dist') },
+                {
+                    directory: path.join(process.env.SAM_WEIGHTS_DIR || path.join(__dirname, '../weights/sam'), 'onnx'),
+                    publicPath: '/assets/sam',
+                },
+            ],
             headers: {
                 // to enable SharedArrayBuffer and ONNX multithreading
                 // https://cloudblogs.microsoft.com/opensource/2021/09/02/onnx-runtime-web-running-your-machine-learning-model-in-browser/
