@@ -51,6 +51,11 @@ import { TrackerControlsUpdateContext } from 'components/annotation-page/standar
 import ApproximationAccuracy from 'components/annotation-page/standard-workspace/controls-side-bar/approximation-accuracy';
 import ConfidenceThreshold from 'components/annotation-page/standard-workspace/controls-side-bar/confidence-threshold';
 import { switchToolsBlockerState } from 'actions/settings-actions';
+import { registerComponentShortcuts } from 'actions/shortcuts-actions';
+import GlobalHotKeys from 'utils/mousetrap-react';
+import { ShortcutScope } from 'utils/enums';
+import { subKeyMap } from 'utils/component-subkeymap';
+import CVATTooltip from 'components/common/cvat-tooltip';
 import withVisibilityHandling from './handle-popover-visibility';
 import ToolsTooltips from './interactor-tooltips';
 
@@ -72,6 +77,8 @@ interface StateToProps {
     toolsBlockerState: ToolsBlockerState;
     frameData: { width: number; height: number; deleted?: boolean };
     interactorExtras: PluginComponent[];
+    keyMap: CombinedState['shortcuts']['keyMap'];
+    normalizedKeyMap: CombinedState['shortcuts']['normalizedKeyMap'];
 }
 
 interface DispatchToProps {
@@ -87,6 +94,17 @@ const MIN_SUPPORTED_INTERACTOR_VERSION = 2;
 const core = getCore();
 const CustomPopover = withVisibilityHandling(Popover, 'tools-control');
 const startWithBoxStorageItem = 'startInteractingWithBox';
+
+const componentShortcuts = {
+    START_INTERACTION_STANDARD_CONTROLS: {
+        name: 'Start AI interaction',
+        description: 'Start the selected AI interactor, refining the selected mask when using SAM',
+        sequences: ['s'],
+        scope: ShortcutScope.STANDARD_WORKSPACE_CONTROLS,
+    },
+};
+
+registerComponentShortcuts(componentShortcuts);
 
 function mapStateToProps(state: CombinedState): StateToProps {
     const {
@@ -110,6 +128,7 @@ function mapStateToProps(state: CombinedState): StateToProps {
         settings: {
             workspace: { toolsBlockerState, defaultApproxPolyAccuracy },
         },
+        shortcuts: { keyMap, normalizedKeyMap },
         plugins: {
             components: {
                 aiTools: {
@@ -139,6 +158,8 @@ function mapStateToProps(state: CombinedState): StateToProps {
         toolsBlockerState,
         frameData,
         interactorExtras,
+        keyMap,
+        normalizedKeyMap,
     };
 }
 
@@ -434,6 +455,55 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
         return states.find((state) => state.clientID === ids[0] &&
             state.shapeType === ShapeType.MASK && state.objectType === ObjectType.SHAPE) ?? null;
     }
+
+    private canStartInteraction(): boolean {
+        const { labels, frameData, isActivated } = this.props;
+        const { activeInteractor, activeLabelID, fetching } = this.state;
+        const selectedMask = this.getSelectedMask();
+        return !!activeInteractor && activeInteractor.version >= MIN_SUPPORTED_INTERACTOR_VERSION &&
+            activeLabelID !== null && !!labels.length && !frameData.deleted && !isActivated && !fetching &&
+            !(selectedMask && (selectedMask.lock || selectedMask.isGroundTruth || selectedMask.hidden));
+    }
+
+    private startInteraction = (): void => {
+        if (!this.canStartInteraction()) return;
+
+        const { canvasInstance, onInteractionStart } = this.props;
+        const {
+            activeInteractor, activeLabelID, startInteractingWithBox, interactorRegionOfInterest,
+        } = this.state;
+        // Capture the target before canceling Select Objects clears the active canvas mode.
+        const selectedMask = this.getSelectedMask();
+        this.setState({ mode: 'interaction' });
+        canvasInstance.cancel();
+        this.pendingRefinementTarget = selectedMask;
+        if (selectedMask) this.setState({ convertMasksToPolygons: false });
+        const startWithBox = !selectedMask && (
+            activeInteractor.params.canvas.startWithBoxOptional ? startInteractingWithBox :
+                activeInteractor.params.canvas.startWithBox ?? false
+        );
+        const parameters = {
+            command: startWithBox ? 'draw_box' as const : 'draw_points' as const,
+            settings: {
+                appendCursorPositionAsPoint: false,
+                removalStrategy: 'any' as const,
+                points_type: 'any' as const,
+                crosshair: startWithBox,
+                ...(!selectedMask && interactorRegionOfInterest ? {
+                    regionOfInterest: interactorRegionOfInterest,
+                } : {}),
+            },
+        };
+        canvasInstance.interact({ enabled: true, ...parameters });
+        onInteractionStart(activeInteractor, selectedMask?.label.id ?? activeLabelID, parameters);
+    };
+
+    private shortcutHandlers = {
+        START_INTERACTION_STANDARD_CONTROLS: (event?: KeyboardEvent): void => {
+            event?.preventDefault();
+            if (!event?.repeat) this.startInteraction();
+        },
+    };
 
     private renderROIControls(): JSX.Element | null {
         const { canvasInstance, frameData } = this.props;
@@ -1313,10 +1383,10 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
 
     private renderInteractorBlock(): JSX.Element {
         const {
-            interactors, canvasInstance, labels, onInteractionStart, interactorExtras,
+            interactors, interactorExtras, normalizedKeyMap,
         } = this.props;
         const {
-            activeInteractor, activeLabelID, fetching, allowROI,
+            activeInteractor, fetching, allowROI,
             startInteractingWithBox, convertMasksToPolygons,
         } = this.state;
 
@@ -1424,45 +1494,19 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
                 </div>
                 <Row align='middle' justify='end'>
                     <Col>
-                        <Button
-                            type='primary'
-                            loading={fetching}
-                            className='cvat-tools-interact-button'
-                            disabled={!activeInteractor || !!cannotRefine ||
-                                fetching ||
-                                activeInteractor.version < MIN_SUPPORTED_INTERACTOR_VERSION}
-                            onClick={() => {
-                                if (activeInteractor && activeLabelID && labels.length) {
-                                    this.setState({ mode: 'interaction' });
-                                    canvasInstance.cancel();
-                                    this.pendingRefinementTarget = selectedMask;
-                                    if (selectedMask) this.setState({ convertMasksToPolygons: false });
-                                    const startWithBox = !selectedMask && (
-                                        activeInteractor.params.canvas.startWithBoxOptional ? startInteractingWithBox :
-                                            activeInteractor.params.canvas.startWithBox ?? false
-                                    );
-
-                                    const parameters = {
-                                        command: startWithBox ? 'draw_box' as const : 'draw_points' as const,
-                                        settings: {
-                                            appendCursorPositionAsPoint: false,
-                                            removalStrategy: 'any' as const,
-                                            points_type: 'any' as const,
-                                            crosshair: startWithBox,
-                                            ...(!selectedMask && this.state.interactorRegionOfInterest ? {
-                                                regionOfInterest: this.state.interactorRegionOfInterest,
-                                            } : {}),
-                                        },
-                                    };
-                                    canvasInstance.interact({ enabled: true, ...parameters });
-                                    onInteractionStart(
-                                        activeInteractor, selectedMask?.label.id ?? activeLabelID, parameters,
-                                    );
-                                }
-                            }}
+                        <CVATTooltip
+                            title={`Start AI interaction ${normalizedKeyMap.START_INTERACTION_STANDARD_CONTROLS}`}
                         >
-                            Interact
-                        </Button>
+                            <Button
+                                type='primary'
+                                loading={fetching}
+                                className='cvat-tools-interact-button'
+                                disabled={!this.canStartInteraction()}
+                                onClick={this.startInteraction}
+                            >
+                                Interact
+                            </Button>
+                        </CVATTooltip>
                     </Col>
                 </Row>
             </>
@@ -1624,7 +1668,7 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
     public render(): JSX.Element | null {
         const {
             interactors, detectors, trackers, isActivated,
-            canvasInstance, labels, frameData,
+            canvasInstance, labels, frameData, keyMap,
         } = this.props;
         const {
             fetching, approxPolyAccuracy, interactorResponseReceived, thresholdValue,
@@ -1693,6 +1737,10 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
 
         return showAnyContent ? (
             <>
+                <GlobalHotKeys
+                    keyMap={subKeyMap(componentShortcuts, keyMap)}
+                    handlers={this.shortcutHandlers}
+                />
                 {this.renderRegionOfInterestOverlay()}
                 <CustomPopover
                     {...dynamicPopoverProps}

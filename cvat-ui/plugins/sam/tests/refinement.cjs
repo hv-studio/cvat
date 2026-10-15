@@ -153,6 +153,7 @@ function makeControl(selected = true) {
     const updated = [];
     const calls = [];
     const canvasCalls = [];
+    let registeredShortcuts;
     const core = {
         plugins: { register: () => {} },
         enums: { Source: { SEMI_AUTO: 'semi-auto' } },
@@ -173,11 +174,19 @@ function makeControl(selected = true) {
         },
         'antd/lib/message': { loading: () => () => {} },
         'antd/lib/notification': { error: ({ description }) => { throw Error(JSON.stringify(description)); } },
+        'actions/shortcuts-actions': { registerComponentShortcuts: (value) => { registeredShortcuts = value; } },
+        'utils/enums': { ShortcutScope: { STANDARD_WORKSPACE_CONTROLS: 'controls' } },
+        'utils/component-subkeymap': { subKeyMap: (shortcuts, keyMap) => Object.fromEntries(
+            Object.keys(shortcuts).map((key) => [key, keyMap[key]]),
+        ) },
         './handle-popover-visibility': { __esModule: true, default: () => placeholder },
     });
     const { ToolsControlComponent } = loadTS(filename, imports, {
         localStorage: { getItem: () => null },
-        window: { addEventListener: () => {}, removeEventListener: () => {} },
+        window: {
+            addEventListener: () => {}, removeEventListener: () => {},
+            document: { getElementById: () => null },
+        },
     });
     const target = {
         clientID: 42, serverID: 99, shapeType: 'mask', objectType: 'shape', frame: 0,
@@ -188,7 +197,8 @@ function makeControl(selected = true) {
         states: [target], selectedStatesID: [], activatedStateID: selected ? 42 : null,
         labels: [{ id: 1 }, target.label], activeLabelID: 1, isActivated: false, frame: 0,
         interactors: [{ id: 'pth-facebookresearch-sam-vit-h', version: 2, params: { canvas: {} } }],
-        trackers: [], interactorExtras: [], jobInstance: { dimension: '2d', id: 1, taskId: 1 },
+        trackers: [], detectors: [], interactorExtras: [], jobInstance: { dimension: '2d', id: 1, taskId: 1 },
+        keyMap: registeredShortcuts, normalizedKeyMap: { START_INTERACTION_STANDARD_CONTROLS: '[S]' },
         frameData: { width: 256, height: 256 }, toolsBlockerState: {}, defaultApproxPolyAccuracy: 5,
         createAnnotations: (states) => created.push(...states),
         updateAnnotations: async (states) => updated.push(...states),
@@ -213,8 +223,9 @@ function makeControl(selected = true) {
         return React.Children.toArray(node.props.children).map(findButton).find(Boolean);
     };
     return {
-        control, target, created, updated, calls, canvasCalls, core,
+        control, target, created, updated, calls, canvasCalls, core, registeredShortcuts,
         button: () => findButton(control.renderInteractorBlock()),
+        shortcut: (event) => control.shortcutHandlers.START_INTERACTION_STANDARD_CONTROLS(event),
     };
 }
 
@@ -267,4 +278,98 @@ test('locked masks cannot start refinement; unselected interactions still create
     assert.equal(created.length, 1);
     assert.equal(updated.length, 0);
     assert.equal(created[0].shapeType, 'mask');
+});
+
+test('Interact shortcut captures a mask selected in Select Objects without opening AI Tools', async () => {
+    const { control, target, calls, canvasCalls, shortcut } = makeControl();
+    control.props.selectedStatesID = [target.clientID];
+    control.props.activatedStateID = null;
+    const hotkeys = require('react').Children.toArray(control.render().props.children)
+        .find((node) => node.props.handlers?.START_INTERACTION_STANDARD_CONTROLS);
+    assert.ok(hotkeys);
+    assert.deepEqual(Array.from(hotkeys.props.keyMap.START_INTERACTION_STANDARD_CONTROLS.sequences), ['s']);
+    hotkeys.props.handlers.START_INTERACTION_STANDARD_CONTROLS();
+    control.onInteraction({ detail: { shapes: [{ shapeType: 'points', type: 'positive', points: [80, 80] }] } });
+    await new Promise(setImmediate);
+    assert.deepEqual(Array.from(calls[0][2].initial_mask), target.points);
+    assert.equal(control.interaction.refinementTarget.clientID, target.clientID);
+    const count = canvasCalls.length;
+    shortcut(); // pressing again must not discard the active refinement
+    assert.equal(canvasCalls.length, count);
+});
+
+test('Interact shortcut honors button availability and configured shortcuts', () => {
+    for (const disable of [
+        ({ target }) => { target.lock = true; },
+        ({ target }) => { target.hidden = true; },
+        ({ target }) => { target.isGroundTruth = true; },
+        ({ control }) => { control.state.fetching = true; },
+        ({ control }) => { control.props.frameData.deleted = true; },
+        ({ control }) => { control.props.labels = []; },
+        ({ control }) => { control.state.activeInteractor = null; },
+        ({ control }) => { control.state.activeInteractor.version = 1; },
+    ]) {
+        const fixture = makeControl();
+        disable(fixture);
+        assert.equal(fixture.button().props.disabled, true);
+        fixture.shortcut();
+        assert.equal(fixture.canvasCalls.length, 0);
+    }
+    const { control, canvasCalls, shortcut } = makeControl(false);
+    shortcut({ repeat: true, preventDefault: () => {} });
+    assert.equal(canvasCalls.length, 0);
+    const id = 'START_INTERACTION_STANDARD_CONTROLS';
+    control.props.keyMap = { [id]: { ...control.props.keyMap[id], sequences: ['alt+i'] } };
+    const hotkeys = require('react').Children.toArray(control.render().props.children)
+        .find((node) => node.props.handlers?.[id]);
+    assert.deepEqual(hotkeys.props.keyMap[id].sequences, ['alt+i']);
+    hotkeys.props.handlers[id]();
+    assert.equal(control.interaction.refinementTarget, null);
+    assert.equal(canvasCalls.length, 1);
+});
+
+test('Select Objects shortcut toggles selection mode and respects disabled controls and remapping', () => {
+    const React = require('react');
+    const filename = path.resolve(sourceDirectory,
+        '../../../../src/components/annotation-page/standard-workspace/controls-side-bar/select-control.tsx');
+    const placeholder = () => null;
+    let registered;
+    const id = 'SWITCH_SELECT_MODE_STANDARD_CONTROLS';
+    const shortcuts = { keyMap: {}, normalizedKeyMap: { [id]: '[Alt+S]' } };
+    const { default: SelectControl } = loadTS(filename, {
+        react: React,
+        'react-redux': { useSelector: (selector) => selector({ shortcuts }) },
+        '@ant-design/icons': placeholder,
+        icons: { SelectIcon: placeholder },
+        'components/common/cvat-tooltip': placeholder,
+        reducers: { ActiveControl: { CURSOR: 'cursor', SELECT: 'select' } },
+        'utils/mousetrap-react': placeholder,
+        'actions/shortcuts-actions': { registerComponentShortcuts: (value) => { registered = value; } },
+        'utils/enums': { ShortcutScope: { STANDARD_WORKSPACE_CONTROLS: 'controls' } },
+        'utils/component-subkeymap': { subKeyMap: (_, keyMap) => keyMap },
+    });
+    assert.deepEqual(Array.from(registered[id].sequences), ['a']);
+    shortcuts.keyMap[id] = { ...registered[id], sequences: ['alt+s'] };
+    const calls = [];
+    const props = {
+        activeControl: 'cursor', disabled: false,
+        canvasInstance: {
+            cancel: () => calls.push('cancel'),
+            selectObjects: ({ enabled }) => calls.push(enabled),
+        },
+        updateActiveControl: (control) => { props.activeControl = control; },
+    };
+    const render = () => React.Children.toArray(SelectControl.type(props).props.children);
+    const [hotkeys, tooltip] = render();
+    assert.deepEqual(hotkeys.props.keyMap[id].sequences, ['alt+s']);
+    assert.equal(tooltip.props.title, 'Select objects [Alt+S]');
+    hotkeys.props.handlers[id]();
+    assert.equal(props.activeControl, 'select');
+    render()[0].props.handlers[id]({ repeat: true, preventDefault: () => {} });
+    assert.equal(props.activeControl, 'select');
+    render()[0].props.handlers[id]();
+    assert.equal(props.activeControl, 'cursor');
+    assert.deepEqual(calls, ['cancel', true, false]);
+    props.disabled = true;
+    assert.equal(SelectControl.type(props).props.children, undefined);
 });

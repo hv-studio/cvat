@@ -63,16 +63,20 @@ To annotate with interactors, do the following:
    <br>![AI Tools interface with open Model information tooltip](/images/image114_detrac.jpg)
 4. (Optional) If the model returns masks, and you need to
    convert masks to polygons, use the **Convert masks to polygons** toggle.
-5. Click **Interact**.
+5. Click **Interact**, or press **S**.
 6. Use the left click to add positive points and the right click to add negative points.
    <br>Number of points you can add depends on the model.
 7. On the top menu, click **Done** (or **Shift+N**, **N**).
+
+**S** starts the currently selected interactor without opening the AI Tools panel.
+You can change **Start AI interaction** in **Settings → Shortcuts**.
+Pressing it during an active interaction leaves the current session unchanged.
 
 ### Refine an existing mask with SAM
 
 Select a single mask on the canvas or in the objects sidebar, open **AI Tools**, and select
 **Segment Anything** in the **Interactors** tab. The panel shows **Refine object #…**.
-Click **Interact**, then add positive points with the left mouse button and negative points
+Click **Interact** or press **S**, then add positive points with the left mouse button and negative points
 with the right mouse button to adjust the mask.
 
 SAM uses the object's existing mask as its initial input. **Done** updates the same object,
