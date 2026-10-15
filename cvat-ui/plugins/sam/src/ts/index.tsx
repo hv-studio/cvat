@@ -15,6 +15,7 @@ import { PluginEntryPoint, APIWrapperEnterOptions, ComponentBuilder } from 'comp
 import {
     InitBody, DecodeBody, WorkerAction, SAMOutputItem,
 } from './inference.worker';
+import maskToInput from './mask-input';
 
 interface SAMPlugin {
     name: string;
@@ -58,6 +59,7 @@ interface SAMPlugin {
         lowResMasks: LRUCache<string, Float32Array>;
         lastROIs: Record<string, string>;
         lastClicks: ClickType[];
+        lastInteractionKey: string | null;
     };
     callbacks: {
         mask2Rle: ((points: Uint8ClampedArray) => number[]) | null;
@@ -160,13 +162,15 @@ const samPlugin: SAMPlugin = {
                     taskID: number,
                     model: MLModel,
                     {
-                        frame, pos_points, neg_points, obj_bbox, roi,
+                        frame, pos_points, neg_points, obj_bbox, roi, initial_mask, interaction_id,
                     }: {
                         frame: number;
                         pos_points: number[][];
                         neg_points: number[][];
                         obj_bbox: number[][];
                         roi?: ROI;
+                        initial_mask?: number[];
+                        interaction_id?: string;
                     },
                 ): Promise<{
                     mask: number[][];
@@ -184,6 +188,7 @@ const samPlugin: SAMPlugin = {
                             plugin.data.embeddings.clear();
                             plugin.data.lowResMasks.clear();
                             plugin.data.lastClicks = [];
+                            plugin.data.lastInteractionKey = null;
                             plugin.data.lastROIs = {};
                             await new Promise<void>((resolve, reject) => {
                                 plugin.data.worker.onmessage = (event: MessageEvent) => {
@@ -252,15 +257,17 @@ const samPlugin: SAMPlugin = {
                                     clicks.push({ clickType: 0, x: point[0], y: point[1] });
                                 });
 
-                                const isLowResMaskRelevant = JSON
-                                    .stringify(clicks.slice(0, -1)) === JSON.stringify(plugin.data.lastClicks);
+                                const interactionKey = `${key}_${buildROISignature(roi)}_${interaction_id ?? ''}`;
+                                const isLowResMaskRelevant = plugin.data.lastInteractionKey === interactionKey &&
+                                    JSON.stringify(clicks.slice(0, -1)) === JSON.stringify(plugin.data.lastClicks);
+                                const lowResMask = isLowResMaskRelevant ? plugin.data.lowResMasks.get(key) : null;
 
                                 plugin.data.worker.postMessage({
                                     action: WorkerAction.DECODE,
                                     payload: modelData({
                                         imageEmbeddings: plugin.data.embeddings.get(key)!,
-                                        lowResMask: isLowResMaskRelevant ?
-                                            plugin.data.lowResMasks.get(key) ?? null : null,
+                                        lowResMask: lowResMask ?? (initial_mask ?
+                                            maskToInput(initial_mask, imWidth, imHeight, roi) : null),
                                         modelScale: {
                                             width: inputWidth,
                                             height: inputHeight,
@@ -281,6 +288,7 @@ const samPlugin: SAMPlugin = {
                                     if (!e.data.error) {
                                         const payload = e.data.payload as SAMOutputItem[];
                                         plugin.data.lastClicks = clicks;
+                                        plugin.data.lastInteractionKey = interactionKey;
 
                                         resolve({
                                             shapes: payload.map((item) => {
@@ -345,6 +353,7 @@ const samPlugin: SAMPlugin = {
         }),
         lastROIs: {},
         lastClicks: [],
+        lastInteractionKey: null,
     },
     callbacks: {
         mask2Rle: null,
@@ -363,6 +372,7 @@ const builder: ComponentBuilder = ({ core }) => {
             samPlugin.data.lowResMasks.clear();
             samPlugin.data.worker.terminate();
             samPlugin.data.lastClicks = [];
+            samPlugin.data.lastInteractionKey = null;
             samPlugin.data.lastROIs = {};
             samPlugin.data.jobs = {};
             samPlugin.data.core = null;

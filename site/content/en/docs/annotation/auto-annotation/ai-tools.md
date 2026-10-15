@@ -68,6 +68,21 @@ To annotate with interactors, do the following:
    <br>Number of points you can add depends on the model.
 7. On the top menu, click **Done** (or **Shift+N**, **N**).
 
+### Refine an existing mask with SAM
+
+Select a single mask on the canvas or in the objects sidebar, open **AI Tools**, and select
+**Segment Anything** in the **Interactors** tab. The panel shows **Refine object #…**.
+Click **Interact**, then add positive points with the left mouse button and negative points
+with the right mouse button to adjust the mask.
+
+SAM uses the object's existing mask as its initial input. **Done** updates the same object,
+keeping its ID, label, attributes, and group. You can undo the update normally.
+**Esc** cancels without changing the object. Wait for the preview to finish updating before clicking **Done**.
+
+Refinement requires an unlocked, visible mask annotation. It uses the full image and keeps the
+result as a mask, so ROI, starting with a box, and conversion to polygons are unavailable during refinement.
+To create a separate object instead, clear the selection before starting **Interact**.
+
 ### Limiting interactor input to a region of interest
 
 For image/video jobs, you can restrict an interactor to a selected image area.

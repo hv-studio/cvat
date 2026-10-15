@@ -157,6 +157,7 @@ export interface DrawData {
 
 export interface InteractionData {
     enabled: boolean;
+    redraw?: number;
     command?: 'draw_points' | 'draw_box' | 'put_shapes' | 'refine';
     payload?: {
         shapes: {
