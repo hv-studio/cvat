@@ -25,9 +25,22 @@ spec:
     - name: PYTHONPATH
       value: /opt/nuclio/sam
 
+  volumes:
+    - volume:
+        name: sam-weights
+        hostPath:
+          path: ${SAM_WEIGHTS_DIR}
+          type: Directory
+      volumeMount:
+        name: sam-weights
+        mountPath: /opt/weights/sam
+        readOnly: true
+
   build:
     image: cvat.pth.facebookresearch.sam.vit_h:latest-gpu
     baseImage: ubuntu:22.04
+    # Use preloaded build helpers instead of refreshing them from their registries.
+    noBaseImagesPull: true
 
     directives:
       preCopy:
@@ -39,21 +52,33 @@ spec:
       # disable interactive frontend
         - kind: ENV
           value: DEBIAN_FRONTEND=noninteractive
+      # use NJU for Python packages, including pip's build dependencies
+        - kind: ENV
+          value: PIP_INDEX_URL=https://mirrors.nju.edu.cn/pypi/web/simple
       # set workdir
         - kind: WORKDIR
           value: /opt/nuclio/sam
+      # bootstrap CA certificates from NJU using Ubuntu's signed HTTP repository
+        - kind: RUN
+          value: >-
+            sed -i -E
+            's@https?://(archive|security)\.ubuntu\.com/ubuntu/?@http://mirrors.nju.edu.cn/ubuntu/@g'
+            /etc/apt/sources.list
+        - kind: RUN
+          value: >-
+            apt-get -o APT::Update::Error-Mode=any update &&
+            apt-get -y --no-install-recommends install ca-certificates &&
+            sed -i 's@http://mirrors.nju.edu.cn/ubuntu/@https://mirrors.nju.edu.cn/ubuntu/@g' /etc/apt/sources.list &&
+            rm -rf /var/lib/apt/lists/*
       # install basic deps
         - kind: RUN
-          value: apt-get update && apt-get -y install curl git python3 python3-pip python-is-python3 ffmpeg libsm6 libxext6 && rm -rf /var/lib/apt/lists/*
+          value: apt-get -o APT::Update::Error-Mode=any update && apt-get -y install curl git python3 python3-pip python-is-python3 ffmpeg libsm6 libxext6 && rm -rf /var/lib/apt/lists/*
       # install sam deps
         - kind: RUN
           value: pip3 install torch torchvision torchaudio pycocotools matplotlib onnxruntime onnx --no-cache-dir
-      # install sam code
+      # install SAM from NJU's PyPI mirror instead of a direct GitHub checkout
         - kind: RUN
-          value: pip3 install git+https://github.com/facebookresearch/segment-anything.git --no-cache-dir
-      # download sam weights
-        - kind: RUN
-          value: curl -O https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth
+          value: pip3 install segment-anything --no-cache-dir
 
   triggers:
     myHttpTrigger:
@@ -69,6 +94,6 @@ spec:
   platform:
     attributes:
       restartPolicy:
-        name: always
+        name: ${SAM_RESTART_POLICY}
         maximumRetryCount: 3
       mountMode: volume

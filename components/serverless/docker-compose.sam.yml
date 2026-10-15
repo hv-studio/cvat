@@ -1,0 +1,11 @@
+# Serve SAM decoders without embedding local weights in the UI image.
+# Use --env-file .env.sam and include this after docker-compose.serverless.yml.
+services:
+  cvat_ui:
+    volumes:
+      - type: bind
+        source: ${SAM_WEIGHTS_DIR:?Set SAM_WEIGHTS_DIR in .env.sam}/onnx
+        target: /usr/share/nginx/html/assets/sam
+        read_only: true
+        bind:
+          create_host_path: false

@@ -15,6 +15,7 @@ import { PluginEntryPoint, APIWrapperEnterOptions, ComponentBuilder } from 'comp
 import {
     InitBody, DecodeBody, WorkerAction, SAMOutputItem,
 } from './inference.worker';
+import maskToInput from './mask-input';
 
 interface SAMPlugin {
     name: string;
@@ -58,6 +59,7 @@ interface SAMPlugin {
         lowResMasks: LRUCache<string, Float32Array>;
         lastROIs: Record<string, string>;
         lastClicks: ClickType[];
+        lastInteractionKey: string | null;
     };
     callbacks: {
         mask2Rle: ((points: Uint8ClampedArray) => number[]) | null;
@@ -140,54 +142,18 @@ const samPlugin: SAMPlugin = {
                     taskID: number,
                     model: MLModel, { frame, roi }: { frame: number; roi?: ROI },
                 ): Promise<null | APIWrapperEnterOptions> {
-                    return new Promise((resolve, reject) => {
-                        function resolvePromise(): void {
-                            const key = `${taskID}_${frame}`;
-
-                            if (plugin.data.lastROIs[key] !== buildROISignature(roi)) {
-                                plugin.data.embeddings.delete(key);
-                                plugin.data.lowResMasks.delete(key);
-                                plugin.data.lastClicks = [];
-                                delete plugin.data.lastROIs[key];
-                            }
-
-                            if (plugin.data.embeddings.has(key)) {
-                                resolve({ preventMethodCall: true });
-                            } else {
-                                resolve(null);
-                            }
-                        }
-
-                        if (model.id === plugin.data.modelID) {
-                            if (!plugin.data.initialized) {
-                                samPlugin.data.worker.postMessage({
-                                    action: WorkerAction.INIT,
-                                    payload: {
-                                        decoderURL: samPlugin.data.modelURL,
-                                    } as InitBody,
-                                });
-
-                                samPlugin.data.worker.onmessage = (e: MessageEvent) => {
-                                    if (e.data.action !== WorkerAction.INIT) {
-                                        reject(new Error(
-                                            `Caught unexpected action response from worker: ${e.data.action}`,
-                                        ));
-                                    }
-
-                                    if (!e.data.error) {
-                                        samPlugin.data.initialized = true;
-                                        resolvePromise();
-                                    } else {
-                                        reject(new Error(`SAM worker was not initialized. ${e.data.error}`));
-                                    }
-                                };
-                            } else {
-                                resolvePromise();
-                            }
-                        } else {
-                            resolve(null);
-                        }
-                    });
+                    if (model.id !== plugin.data.modelID) {
+                        return null;
+                    }
+                    const key = `${taskID}_${frame}`;
+                    if (plugin.data.lastROIs[key] !== buildROISignature(roi)) {
+                        plugin.data.embeddings.delete(key);
+                        plugin.data.lowResMasks.delete(key);
+                        plugin.data.lastClicks = [];
+                        delete plugin.data.lastROIs[key];
+                    }
+                    return plugin.data.initialized && plugin.data.embeddings.has(key) ?
+                        { preventMethodCall: true } : null;
                 },
 
                 async leave(
@@ -196,24 +162,54 @@ const samPlugin: SAMPlugin = {
                     taskID: number,
                     model: MLModel,
                     {
-                        frame, pos_points, neg_points, obj_bbox, roi,
+                        frame, pos_points, neg_points, obj_bbox, roi, initial_mask, interaction_id,
                     }: {
                         frame: number;
                         pos_points: number[][];
                         neg_points: number[][];
                         obj_bbox: number[][];
                         roi?: ROI;
+                        initial_mask?: number[];
+                        interaction_id?: string;
                     },
                 ): Promise<{
                     mask: number[][];
                     bounds: [number, number, number, number];
                 } | unknown> {
-                    return new Promise((resolve, reject) => {
-                        if (model.id !== plugin.data.modelID) {
-                            resolve(result);
-                            return;
-                        }
+                    if (model.id !== plugin.data.modelID) {
+                        return result;
+                    }
 
+                    if (result) {
+                        const response = result as { blob: string; model_type: string };
+                        const decoderURL = `/assets/sam/decoder-${response.model_type}.onnx`;
+                        if (plugin.data.modelURL !== decoderURL || !plugin.data.initialized) {
+                            plugin.data.initialized = false;
+                            plugin.data.embeddings.clear();
+                            plugin.data.lowResMasks.clear();
+                            plugin.data.lastClicks = [];
+                            plugin.data.lastInteractionKey = null;
+                            plugin.data.lastROIs = {};
+                            await new Promise<void>((resolve, reject) => {
+                                plugin.data.worker.onmessage = (event: MessageEvent) => {
+                                    if (event.data.action !== WorkerAction.INIT || event.data.error) {
+                                        reject(new Error(event.data.error || 'Unexpected SAM initialization response'));
+                                        return;
+                                    }
+                                    plugin.data.modelURL = decoderURL;
+                                    plugin.data.initialized = true;
+                                    resolve();
+                                };
+                                plugin.data.worker.onerror = (error) => reject(error);
+                                plugin.data.worker.postMessage({
+                                    action: WorkerAction.INIT,
+                                    payload: { decoderURL } as InitBody,
+                                });
+                            });
+                        }
+                    }
+
+                    return new Promise((resolve, reject) => {
                         const job = Object.values(plugin.data.jobs).find((_job) => (
                             _job.taskId === taskID && frame >= _job.startFrame && frame <= _job.stopFrame
                         )) as Job;
@@ -261,15 +257,17 @@ const samPlugin: SAMPlugin = {
                                     clicks.push({ clickType: 0, x: point[0], y: point[1] });
                                 });
 
-                                const isLowResMaskRelevant = JSON
-                                    .stringify(clicks.slice(0, -1)) === JSON.stringify(plugin.data.lastClicks);
+                                const interactionKey = `${key}_${buildROISignature(roi)}_${interaction_id ?? ''}`;
+                                const isLowResMaskRelevant = plugin.data.lastInteractionKey === interactionKey &&
+                                    JSON.stringify(clicks.slice(0, -1)) === JSON.stringify(plugin.data.lastClicks);
+                                const lowResMask = isLowResMaskRelevant ? plugin.data.lowResMasks.get(key) : null;
 
                                 plugin.data.worker.postMessage({
                                     action: WorkerAction.DECODE,
                                     payload: modelData({
                                         imageEmbeddings: plugin.data.embeddings.get(key)!,
-                                        lowResMask: isLowResMaskRelevant ?
-                                            plugin.data.lowResMasks.get(key) ?? null : null,
+                                        lowResMask: lowResMask ?? (initial_mask ?
+                                            maskToInput(initial_mask, imWidth, imHeight, roi) : null),
                                         modelScale: {
                                             width: inputWidth,
                                             height: inputHeight,
@@ -284,11 +282,13 @@ const samPlugin: SAMPlugin = {
                                         const msg = 'Caught unexpected action response from worker: ' +
                                                 `${e.data.action}, while "${WorkerAction.DECODE}" expected`;
                                         reject(new Error(msg));
+                                        return;
                                     }
 
                                     if (!e.data.error) {
                                         const payload = e.data.payload as SAMOutputItem[];
                                         plugin.data.lastClicks = clicks;
+                                        plugin.data.lastInteractionKey = interactionKey;
 
                                         resolve({
                                             shapes: payload.map((item) => {
@@ -326,7 +326,7 @@ const samPlugin: SAMPlugin = {
                                 plugin.data.worker.onerror = ((error) => {
                                     reject(error);
                                 });
-                            });
+                            }).catch(reject);
                     });
                 },
             },
@@ -338,7 +338,7 @@ const samPlugin: SAMPlugin = {
         worker: new Worker(new URL('./inference.worker', import.meta.url)),
         jobs: {},
         modelID: 'pth-facebookresearch-sam-vit-h',
-        modelURL: '/assets/decoder.onnx',
+        modelURL: '',
         embeddings: new LRUCache({
             // float32 tensor [256, 64, 64] is 4 MB, max 128 MB
             max: 32,
@@ -353,6 +353,7 @@ const samPlugin: SAMPlugin = {
         }),
         lastROIs: {},
         lastClicks: [],
+        lastInteractionKey: null,
     },
     callbacks: {
         mask2Rle: null,
@@ -371,10 +372,12 @@ const builder: ComponentBuilder = ({ core }) => {
             samPlugin.data.lowResMasks.clear();
             samPlugin.data.worker.terminate();
             samPlugin.data.lastClicks = [];
+            samPlugin.data.lastInteractionKey = null;
             samPlugin.data.lastROIs = {};
             samPlugin.data.jobs = {};
             samPlugin.data.core = null;
             samPlugin.data.initialized = false;
+            samPlugin.data.modelURL = '';
         },
     };
 };

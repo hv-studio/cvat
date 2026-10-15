@@ -51,6 +51,11 @@ import { TrackerControlsUpdateContext } from 'components/annotation-page/standar
 import ApproximationAccuracy from 'components/annotation-page/standard-workspace/controls-side-bar/approximation-accuracy';
 import ConfidenceThreshold from 'components/annotation-page/standard-workspace/controls-side-bar/confidence-threshold';
 import { switchToolsBlockerState } from 'actions/settings-actions';
+import { registerComponentShortcuts } from 'actions/shortcuts-actions';
+import GlobalHotKeys from 'utils/mousetrap-react';
+import { ShortcutScope } from 'utils/enums';
+import { subKeyMap } from 'utils/component-subkeymap';
+import CVATTooltip from 'components/common/cvat-tooltip';
 import withVisibilityHandling from './handle-popover-visibility';
 import ToolsTooltips from './interactor-tooltips';
 
@@ -58,6 +63,8 @@ interface StateToProps {
     canvasInstance: Canvas;
     labels: Label[];
     states: ObjectState[];
+    activatedStateID: number | null;
+    selectedStatesID: number[];
     activeLabelID: number | null;
     jobInstance: Job;
     isActivated: boolean;
@@ -70,6 +77,8 @@ interface StateToProps {
     toolsBlockerState: ToolsBlockerState;
     frameData: { width: number; height: number; deleted?: boolean };
     interactorExtras: PluginComponent[];
+    keyMap: CombinedState['shortcuts']['keyMap'];
+    normalizedKeyMap: CombinedState['shortcuts']['normalizedKeyMap'];
 }
 
 interface DispatchToProps {
@@ -86,6 +95,17 @@ const core = getCore();
 const CustomPopover = withVisibilityHandling(Popover, 'tools-control');
 const startWithBoxStorageItem = 'startInteractingWithBox';
 
+const componentShortcuts = {
+    START_INTERACTION_STANDARD_CONTROLS: {
+        name: 'Start AI interaction',
+        description: 'Start the selected AI interactor, refining the selected mask when using SAM',
+        sequences: ['s'],
+        scope: ShortcutScope.STANDARD_WORKSPACE_CONTROLS,
+    },
+};
+
+registerComponentShortcuts(componentShortcuts);
+
 function mapStateToProps(state: CombinedState): StateToProps {
     const {
         annotation: {
@@ -97,6 +117,8 @@ function mapStateToProps(state: CombinedState): StateToProps {
             annotations: {
                 zLayer: { cur: currentZOrder },
                 states,
+                activatedStateID,
+                selectedStatesID,
             },
             drawing: { activeLabelID },
         },
@@ -106,6 +128,7 @@ function mapStateToProps(state: CombinedState): StateToProps {
         settings: {
             workspace: { toolsBlockerState, defaultApproxPolyAccuracy },
         },
+        shortcuts: { keyMap, normalizedKeyMap },
         plugins: {
             components: {
                 aiTools: {
@@ -125,6 +148,8 @@ function mapStateToProps(state: CombinedState): StateToProps {
         activeLabelID,
         labels,
         states,
+        activatedStateID,
+        selectedStatesID,
         canvasInstance: canvasInstance as Canvas,
         jobInstance: jobInstance as Job,
         frame,
@@ -133,6 +158,8 @@ function mapStateToProps(state: CombinedState): StateToProps {
         toolsBlockerState,
         frameData,
         interactorExtras,
+        keyMap,
+        normalizedKeyMap,
     };
 }
 
@@ -237,12 +264,14 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
     public static contextType = TrackerControlsUpdateContext;
     private mounted = false;
     private savingTrackingClientIDs = new Set<number>();
+    private pendingRefinementTarget: ObjectState | null = null;
     private get updateTrackerControls(): React.ContextType<typeof TrackerControlsUpdateContext> {
         return this.context as React.ContextType<typeof TrackerControlsUpdateContext>;
     }
     private interaction: {
         id: string | null;
         isAborted: boolean;
+        refinementTarget: { clientID: number; frame: number; points: number[] } | null;
         latestPostponedEvent: Event | null;
         latestResponse: {
             rle: Int32Array;
@@ -258,6 +287,8 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
                 neg_points: number[][];
                 pos_points: number[][];
                 obj_bbox: number[][];
+                interaction_id: string;
+                initial_mask?: number[];
             };
         } | null;
         closeFetchingMessage: (() => void) | null;
@@ -292,6 +323,7 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
         this.interaction = {
             id: null,
             isAborted: false,
+            refinementTarget: null,
             latestPostponedEvent: null,
             latestResponse: [],
             latestRequest: null,
@@ -347,10 +379,17 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
                 }
             }
         } else if (!prevProps.isActivated && isActivated) {
+            const target = this.pendingRefinementTarget;
+            this.pendingRefinementTarget = null;
             // reset flags when start interaction/tracking
             this.interaction = {
                 id: null,
                 isAborted: false,
+                refinementTarget: target ? {
+                    clientID: target.clientID,
+                    frame: target.frame,
+                    points: [...target.points],
+                } : null,
                 latestPostponedEvent: null,
                 latestResponse: [],
                 latestRequest: null,
@@ -408,6 +447,64 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
         return trackers.filter((tracker: MLModel) => tracker.supportedShapeTypes!.includes(ShapeType.RECTANGLE));
     }
 
+    private getSelectedMask(): ObjectState | null {
+        const { states, selectedStatesID, activatedStateID } = this.props;
+        if (this.state.activeInteractor?.id !== 'pth-facebookresearch-sam-vit-h') return null;
+        const ids = selectedStatesID.length ? selectedStatesID : [activatedStateID];
+        if (ids.length !== 1) return null;
+        return states.find((state) => state.clientID === ids[0] &&
+            state.shapeType === ShapeType.MASK && state.objectType === ObjectType.SHAPE) ?? null;
+    }
+
+    private canStartInteraction(): boolean {
+        const { labels, frameData, isActivated } = this.props;
+        const { activeInteractor, activeLabelID, fetching } = this.state;
+        const selectedMask = this.getSelectedMask();
+        return !!activeInteractor && activeInteractor.version >= MIN_SUPPORTED_INTERACTOR_VERSION &&
+            activeLabelID !== null && !!labels.length && !frameData.deleted && !isActivated && !fetching &&
+            !(selectedMask && (selectedMask.lock || selectedMask.isGroundTruth || selectedMask.hidden));
+    }
+
+    private startInteraction = (): void => {
+        if (!this.canStartInteraction()) return;
+
+        const { canvasInstance, onInteractionStart } = this.props;
+        const {
+            activeInteractor, activeLabelID, startInteractingWithBox, interactorRegionOfInterest,
+        } = this.state;
+        // Capture the target before canceling Select Objects clears the active canvas mode.
+        const selectedMask = this.getSelectedMask();
+        this.setState({ mode: 'interaction' });
+        canvasInstance.cancel();
+        this.pendingRefinementTarget = selectedMask;
+        if (selectedMask) this.setState({ convertMasksToPolygons: false });
+        const startWithBox = !selectedMask && (
+            activeInteractor.params.canvas.startWithBoxOptional ? startInteractingWithBox :
+                activeInteractor.params.canvas.startWithBox ?? false
+        );
+        const parameters = {
+            command: startWithBox ? 'draw_box' as const : 'draw_points' as const,
+            settings: {
+                appendCursorPositionAsPoint: false,
+                removalStrategy: 'any' as const,
+                points_type: 'any' as const,
+                crosshair: startWithBox,
+                ...(!selectedMask && interactorRegionOfInterest ? {
+                    regionOfInterest: interactorRegionOfInterest,
+                } : {}),
+            },
+        };
+        canvasInstance.interact({ enabled: true, ...parameters });
+        onInteractionStart(activeInteractor, selectedMask?.label.id ?? activeLabelID, parameters);
+    };
+
+    private shortcutHandlers = {
+        START_INTERACTION_STANDARD_CONTROLS: (event?: KeyboardEvent): void => {
+            event?.preventDefault();
+            if (!event?.repeat) this.startInteraction();
+        },
+    };
+
     private renderROIControls(): JSX.Element | null {
         const { canvasInstance, frameData } = this.props;
 
@@ -433,7 +530,8 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
         const attachmentBoard = window.document.getElementById('cvat_canvas_attachment_board');
         let regionOfInterest = null;
         if ((activeTab === 'interactors' && toolsPopoverVisible) || (isActivated && mode === 'interaction')) {
-            regionOfInterest = interactorRegionOfInterest;
+            regionOfInterest = (isActivated ? this.interaction.refinementTarget : this.getSelectedMask()) ?
+                null : interactorRegionOfInterest;
         } else if (activeTab === 'detectors' && toolsPopoverVisible) {
             regionOfInterest = detectorRegionOfInterest;
         }
@@ -497,11 +595,13 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
     };
 
     private cancelListener = async (): Promise<void> => {
+        this.interaction.isAborted = true;
+        this.interaction.latestRequest = null;
+        this.interaction.latestPostponedEvent = null;
         const { fetching } = this.state;
         if (fetching) {
             // user pressed ESC
             this.setState({ fetching: false });
-            this.interaction.isAborted = true;
         }
     };
 
@@ -610,6 +710,7 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
         const boxes = convertShapesForInteractor(shapes, 'rectangle', 'positive');
         const posPoints = convertShapesForInteractor(shapes, 'points', 'positive');
         const negPoints = convertShapesForInteractor(shapes, 'points', 'negative');
+        const { refinementTarget } = this.interaction;
 
         this.interaction.latestRequest = {
             interactor,
@@ -618,7 +719,9 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
                 obj_bbox: boxes,
                 pos_points: posPoints,
                 neg_points: negPoints,
-                ...(interactorRegionOfInterest ? { roi: interactorRegionOfInterest } : {}),
+                interaction_id: this.interaction.id,
+                ...(refinementTarget ? { initial_mask: refinementTarget.points } : {}),
+                ...(!refinementTarget && interactorRegionOfInterest ? { roi: interactorRegionOfInterest } : {}),
             },
         };
 
@@ -689,7 +792,9 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
 
     private interactionListener = async (e: Event): Promise<void> => {
         const { toolsBlockerState, isActivated, canvasInstance } = this.props;
-        const { activeInteractor, mode, interactorRegionOfInterest } = this.state;
+        const { activeInteractor, mode } = this.state;
+        const interactorRegionOfInterest = this.interaction.refinementTarget ?
+            null : this.state.interactorRegionOfInterest;
 
         if (!isActivated) {
             return;
@@ -710,7 +815,8 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
                 this.interaction.latestRequest = null;
                 this.constructFromLatestResponse();
             } else {
-                const isRectangleRequired = activeInteractor!.params.canvas.startWithBox === true;
+                const isRectangleRequired = !this.interaction.refinementTarget &&
+                    activeInteractor!.params.canvas.startWithBox === true;
                 const minPosPoints = activeInteractor!.params.canvas.minPosVertices ?? 0;
                 const minNegPoints = activeInteractor!.params.canvas.minNegVertices ?? 0;
 
@@ -799,6 +905,7 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
         canvasInstance.interact({
             enabled: true,
             command: 'put_shapes',
+            ...(this.interaction.refinementTarget ? { redraw: this.interaction.refinementTarget.clientID } : {}),
             payload: {
                 shapes: shapesToBeDrawn,
             },
@@ -1070,10 +1177,22 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
     private async constructFromLatestResponse(): Promise<void> {
         const { convertMasksToPolygons, thresholdValue } = this.state;
         const {
-            frame, labels, currentZOrder, activeLabelID, createAnnotations,
+            frame, labels, currentZOrder, activeLabelID, createAnnotations, states, updateAnnotations,
         } = this.props;
 
         if (!this.interaction.latestResponse.length) {
+            return;
+        }
+
+        const { refinementTarget } = this.interaction;
+        if (refinementTarget) {
+            const target = states.find((state) => state.clientID === refinementTarget.clientID);
+            const [response] = this.interaction.latestResponse;
+            if (target && target.frame === frame && refinementTarget.frame === frame &&
+                !target.lock && !target.isGroundTruth && response.rle.length >= 6) {
+                target.points = Array.from(response.rle);
+                await updateAnnotations([target]);
+            }
             return;
         }
 
@@ -1264,10 +1383,10 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
 
     private renderInteractorBlock(): JSX.Element {
         const {
-            interactors, canvasInstance, labels, onInteractionStart, interactorExtras,
+            interactors, interactorExtras, normalizedKeyMap,
         } = this.props;
         const {
-            activeInteractor, activeLabelID, fetching, allowROI,
+            activeInteractor, fetching, allowROI,
             startInteractingWithBox, convertMasksToPolygons,
         } = this.state;
 
@@ -1285,6 +1404,8 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
 
         const minNegVertices = activeInteractor?.params?.canvas?.minNegVertices ?? -1;
         const renderStartWithBox = activeInteractor?.params?.canvas?.startWithBoxOptional ?? false;
+        const selectedMask = this.getSelectedMask();
+        const cannotRefine = selectedMask && (selectedMask.lock || selectedMask.isGroundTruth || selectedMask.hidden);
 
         const renderedInteractorExtras = interactorExtras
             .sort((a, b) => a.data.weight - b.data.weight)
@@ -1336,10 +1457,18 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
                     </Col>
                 </Row>
                 <div className='cvat-tools-interactor-setups'>
-                    {allowROI && this.renderROIControls()}
+                    {selectedMask && (
+                        <Text className='cvat-tools-refinement-target'>
+                            {`Refine object #${selectedMask.clientID}. `}
+                            {cannotRefine ? 'This mask is not editable. Select an unlocked, visible annotation.' :
+                                'Add points to refine its mask. Done updates this object; Esc cancels.'}
+                        </Text>
+                    )}
+                    {allowROI && !selectedMask && this.renderROIControls()}
                     <div>
                         <Switch
-                            checked={convertMasksToPolygons}
+                            checked={!selectedMask && convertMasksToPolygons}
+                            disabled={!!selectedMask}
                             onChange={(checked: boolean) => {
                                 this.setState({ convertMasksToPolygons: checked });
                             }}
@@ -1349,7 +1478,8 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
                     {renderStartWithBox && (
                         <div>
                             <Switch
-                                checked={startInteractingWithBox}
+                                checked={!selectedMask && startInteractingWithBox}
+                                disabled={!!selectedMask}
                                 onChange={(value: boolean) => {
                                     localStorage.setItem(startWithBoxStorageItem, value.toString());
                                     this.setState({ startInteractingWithBox: value });
@@ -1364,40 +1494,19 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
                 </div>
                 <Row align='middle' justify='end'>
                     <Col>
-                        <Button
-                            type='primary'
-                            loading={fetching}
-                            className='cvat-tools-interact-button'
-                            disabled={!activeInteractor ||
-                                fetching ||
-                                activeInteractor.version < MIN_SUPPORTED_INTERACTOR_VERSION}
-                            onClick={() => {
-                                if (activeInteractor && activeLabelID && labels.length) {
-                                    this.setState({ mode: 'interaction' });
-                                    canvasInstance.cancel();
-                                    const startWithBox = activeInteractor.params.canvas.startWithBoxOptional ? (
-                                        startInteractingWithBox
-                                    ) : activeInteractor.params.canvas.startWithBox ?? false;
-
-                                    const parameters = {
-                                        command: startWithBox ? 'draw_box' as const : 'draw_points' as const,
-                                        settings: {
-                                            appendCursorPositionAsPoint: false,
-                                            removalStrategy: 'any' as const,
-                                            points_type: 'any' as const,
-                                            crosshair: startWithBox,
-                                            ...(this.state.interactorRegionOfInterest ? {
-                                                regionOfInterest: this.state.interactorRegionOfInterest,
-                                            } : {}),
-                                        },
-                                    };
-                                    canvasInstance.interact({ enabled: true, ...parameters });
-                                    onInteractionStart(activeInteractor, activeLabelID, parameters);
-                                }
-                            }}
+                        <CVATTooltip
+                            title={`Start AI interaction ${normalizedKeyMap.START_INTERACTION_STANDARD_CONTROLS}`}
                         >
-                            Interact
-                        </Button>
+                            <Button
+                                type='primary'
+                                loading={fetching}
+                                className='cvat-tools-interact-button'
+                                disabled={!this.canStartInteraction()}
+                                onClick={this.startInteraction}
+                            >
+                                Interact
+                            </Button>
+                        </CVATTooltip>
                     </Col>
                 </Row>
             </>
@@ -1533,7 +1642,7 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
                         label: 'Interactors',
                         children: (
                             <>
-                                {this.renderLabelBlock()}
+                                {!this.getSelectedMask() && this.renderLabelBlock()}
                                 {this.renderInteractorBlock()}
                             </>
                         ),
@@ -1559,7 +1668,7 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
     public render(): JSX.Element | null {
         const {
             interactors, detectors, trackers, isActivated,
-            canvasInstance, labels, frameData,
+            canvasInstance, labels, frameData, keyMap,
         } = this.props;
         const {
             fetching, approxPolyAccuracy, interactorResponseReceived, thresholdValue,
@@ -1628,6 +1737,10 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
 
         return showAnyContent ? (
             <>
+                <GlobalHotKeys
+                    keyMap={subKeyMap(componentShortcuts, keyMap)}
+                    handlers={this.shortcutHandlers}
+                />
                 {this.renderRegionOfInterestOverlay()}
                 <CustomPopover
                     {...dynamicPopoverProps}

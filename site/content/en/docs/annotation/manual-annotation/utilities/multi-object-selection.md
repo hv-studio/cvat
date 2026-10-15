@@ -30,7 +30,7 @@ and a **SELECTION (N)** label, where `N` is the number of selected objects.
 To select objects with a selection box, do the following:
 
 1. On the {{< ilink "/docs/annotation/annotation-editor/controls-sidebar#navigation" "**Controls sidebar**" >}},
-   select **Select objects**.
+   select **Select objects**, or press **A**.
 2. Click an empty area of the canvas and drag a selection box around the objects.
 3. Release the mouse button.
 
@@ -40,6 +40,7 @@ Only objects fully contained by the selection box are selected.
 For rotated objects, CVAT uses the transformed object boundaries.
 The **Select objects** tool remains active, so you can draw another selection box without selecting the tool again.
 Each new selection box starts a new selection and replaces the previous one.
+Press **A** again to return to **Cursor**. You can change this shortcut in **Settings → Shortcuts**.
 
 You can also hold **Shift** and start dragging from an empty canvas area while using the **Cursor** tool.
 This activates **Select objects** and starts the selection box from the initial pointer position.

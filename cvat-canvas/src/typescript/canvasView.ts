@@ -359,6 +359,7 @@ export class CanvasViewImpl implements CanvasView, Listener {
         }
 
         if (shapes === null) {
+            this.restoreDrawHiddenObjects();
             this.dispatchCanceledEvent();
         }
     };
@@ -2819,6 +2820,9 @@ export class CanvasViewImpl implements CanvasView, Listener {
             }
         } else if (reason === UpdateReasons.INTERACT) {
             const data: InteractionData = this.controller.interactionData;
+            if (data.enabled && typeof data.redraw === 'number') {
+                this.setupInnerFlags(data.redraw, 'drawHidden', true);
+            }
             if (data.enabled && this.mode === Mode.IDLE) {
                 this.canvas.style.cursor = 'crosshair';
                 this.mode = Mode.INTERACT;

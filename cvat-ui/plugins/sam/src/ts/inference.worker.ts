@@ -5,6 +5,7 @@
 import { InferenceSession, env, Tensor } from 'onnxruntime-web';
 
 let decoder: InferenceSession | null = null;
+let decoderURL: string | null = null;
 
 env.wasm.wasmPaths = '/assets/';
 
@@ -53,15 +54,20 @@ const errorToMessage = (error: unknown): string => {
 if ((self as any).importScripts) {
     onmessage = (e: MessageEvent<WorkerInput>) => {
         if (e.data.action === WorkerAction.INIT) {
-            if (decoder) {
-                return;
-            }
-
             const body = e.data.payload as InitBody;
-            InferenceSession.create(body.decoderURL).then((decoderSession) => {
-                decoder = decoderSession;
+            const initialize = async (): Promise<void> => {
+                if (decoder && decoderURL !== body.decoderURL) {
+                    await decoder.release();
+                    decoder = null;
+                    decoderURL = null;
+                }
+                if (!decoder) {
+                    decoder = await InferenceSession.create(body.decoderURL, { executionProviders: ['wasm'] });
+                    decoderURL = body.decoderURL;
+                }
                 postMessage({ action: WorkerAction.INIT });
-            }).catch((error: unknown) => {
+            };
+            initialize().catch((error: unknown) => {
                 postMessage({ action: WorkerAction.INIT, error: errorToMessage(error) });
             });
         } else if (!decoder) {
@@ -84,21 +90,23 @@ if ((self as any).importScripts) {
 
             decoder.run(inputs).then((results) => (
                 Promise.all([
-                    results.xtl.getData() as unknown as Int32Array,
-                    results.ytl.getData() as unknown as Int32Array,
-                    results.xbr.getData() as unknown as Int32Array,
-                    results.ybr.getData() as unknown as Int32Array,
-                    results.masks.getData() as unknown as Float32Array,
-                    results.low_res_masks.getData() as unknown as Float32Array,
+                    results.xtl.getData(),
+                    results.ytl.getData(),
+                    results.xbr.getData(),
+                    results.ybr.getData(),
+                    results.masks.getData(),
+                    results.low_res_masks.getData(),
                 ])
             )).then((
-                [xtl, ytl, xbr, ybr, mask, lowResMask]:
-                [Int32Array, Int32Array, Int32Array, Int32Array, Float32Array, Float32Array],
+                [xtl, ytl, xbr, ybr, mask, lowResMask],
             ) => {
+                if (!(mask instanceof Uint8Array) || !(lowResMask instanceof Float32Array)) {
+                    throw new Error('SAM decoder must return uint8 masks and float32 low_res_masks');
+                }
                 postMessage({
                     action: WorkerAction.DECODE,
                     payload: [{
-                        mask_input: lowResMask as Float32Array,
+                        mask_input: lowResMask,
                         points: new Uint8ClampedArray(mask.buffer, mask.byteOffset, mask.length),
                         bounds: [Number(xtl[0]), Number(ytl[0]), Number(xbr[0]), Number(ybr[0])] as const,
                     }] as SAMOutputItem[],

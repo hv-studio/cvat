@@ -25,6 +25,17 @@ spec:
     - name: PYTHONPATH
       value: /opt/nuclio/sam
 
+  volumes:
+    - volume:
+        name: sam-weights
+        hostPath:
+          path: ${SAM_WEIGHTS_DIR}
+          type: Directory
+      volumeMount:
+        name: sam-weights
+        mountPath: /opt/weights/sam
+        readOnly: true
+
   build:
     image: cvat.pth.facebookresearch.sam.vit_h
     baseImage: ubuntu:22.04
@@ -46,9 +57,6 @@ spec:
       # install sam code
         - kind: RUN
           value: pip3 install git+https://github.com/facebookresearch/segment-anything.git --no-cache-dir
-      # download sam weights
-        - kind: RUN
-          value: curl -O https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth
 
   triggers:
     myHttpTrigger:
@@ -61,6 +69,6 @@ spec:
   platform:
     attributes:
       restartPolicy:
-        name: always
+        name: ${SAM_RESTART_POLICY}
         maximumRetryCount: 3
       mountMode: volume
