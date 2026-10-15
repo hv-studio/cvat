@@ -103,9 +103,23 @@ variables live in `.env`, load both files with `--env-file .env --env-file .env.
 For the frontend development server, export `SAM_WEIGHTS_DIR` before starting it;
 its default decoder directory is `weights/sam/onnx` under the repository root.
 
-Deploy the updated backend using `serverless/deploy_gpu.sh`, or an updated prebuilt
-image as described in [INSTALL.md](../../../../INSTALL.md). Backend and UI must both
-contain the model-selection changes. Older image archives contain the fixed-model
+Deploy the updated backend from the repository root with the script for your hardware:
+
+```bash
+# CPU
+./serverless/deploy_cpu.sh serverless/pytorch/facebookresearch/sam/nuclio
+
+# GPU
+./serverless/deploy_gpu.sh serverless/pytorch/facebookresearch/sam/nuclio
+```
+
+Both scripts load `.env.sam`, mount the configured weights directory read-only, and
+apply `SAM_RESTART_POLICY`. CPU deployments also require `cvat.json` and the matching
+ONNX decoder; the CPU image no longer downloads a fixed ViT-H checkpoint during its build.
+
+Alternatively, deploy an updated prebuilt GPU image as described in
+[INSTALL.md](../../../../INSTALL.md). Backend and UI must both contain the
+model-selection changes. Older image archives contain the fixed-model
 implementation and need a code update; importing them alone does not enable this protocol.
 
 Once the updated services and mounts are in place, switch models by:
