@@ -1,7 +1,8 @@
 # 用 CVAT 核验 YTVIS 掩码标注
 
-本文以 `youtube_vis_dancetrack` 验证集中的 `dancetrack0004` 为例，介绍从创建 Project、导入逐帧标注，
-到使用 SAM 修正已有掩码并导出的操作。先完成 [CVAT 与 SAM 安装](../INSTALL.md)，打开
+本文以 LongTrack 中的 `dancetrack0041__p1` 为例，使用本分支的 **YTVIS 1.0** 格式直接导入
+轨迹标注、使用 SAM 精修掩码，再导出 YTVIS；原始 DanceTrack GT bbox 保持不变。
+先完成 [CVAT 与 SAM 安装](../INSTALL.md)，打开
 <http://localhost:8080/> 并登录。
 
 ## 1. 准备图片与标注
@@ -9,34 +10,31 @@
 CVAT 中的 **Project（项目）**统一管理标签，**Task（任务）**存放一组图片及其标注，
 **Job（作业）**是实际打开的编辑页面。建议一个数据集建一个 Project，一个视频序列建一个 Task。
 
-本例使用已经按视频拆分的 **COCO instances 逐帧标注**。图片与标注不包含在本仓库或 Docker 镜像中，
-需要另行准备，目录如下：
+图片与标注不包含在 Docker 镜像中，需要另行准备。本例目录如下：
 
 ```text
-youtube_vis_dancetrack/
-├── valid/
-│   ├── pseudo_instances.json               # 原始 YTVIS 标注，不直接导入
-│   ├── JPEGImages/
-│   │   └── dancetrack0004/
-│   │       ├── 00000001.jpg
-│   │       └── ...
-│   └── archives/
-│       └── dancetrack0004.zip              # 上传图片用
-└── annotations/
-    ├── youtube_vis_dancetrack_valid_pseudo.json
-    └── valid_pseudo/
-        └── dancetrack0004.json             # 上传标注用
+data/longtrack/
+├── v3/
+│   └── instances.json                     # 上传标注用，可以包含多个视频
+└── youtube_vis_longtrack/valid/
+    ├── JPEGImages/
+    │   └── dancetrack0041__p1/
+    │       ├── 00000001.jpg
+    │       └── ...
+    └── archives/
+        └── dancetrack0041__p1.zip          # 上传图片用
 ```
 
-整体验证集 JSON 已拆分到 `annotations/valid_pseudo/`。图片 ZIP 与 JSON 必须属于同一个序列，
-不要给单序列 Task 上传整个验证集的 JSON。本例包含 1,203 张图片，类别名称为 `pedestrian`。
+本例包含 1,003 张图片，类别名称为 `person`。可以直接上传完整的 `v3/instances.json`，
+导入器按 Task 的图片路径匹配其中唯一一个完整视频，无需先转换为 COCO 或拆分 JSON。
+当前入口仅支持 **Task 级别的一段完整图片序列**；不自动建任务，不支持 Project/Job 级导入导出，
+也不按 MP4 的帧位置推断匹配。
 
-已有匹配的 ZIP 时可直接使用。需要重新打包时，在终端设置数据集目录，再执行下面的命令；
-将示例绝对路径替换成自己的路径：
+已有匹配的 ZIP 时可直接使用。需要重新打包时，从仓库根目录执行：
 
 ```bash
-export DATASET_ROOT="/absolute/path/to/youtube_vis_dancetrack"
-export SEQUENCE="dancetrack0004"
+export DATASET_ROOT="$PWD/data/longtrack"
+export SEQUENCE="dancetrack0041__p1"
 
 python3 - <<'PY'
 import json
@@ -46,50 +44,50 @@ from pathlib import Path
 
 root = Path(os.environ['DATASET_ROOT'])
 sequence = os.environ['SEQUENCE']
-annotation = root / 'annotations' / 'valid_pseudo' / f'{sequence}.json'
+annotation = root / 'v3' / 'instances.json'
 data = json.loads(annotation.read_text(encoding='utf-8'))
-archive = root / 'valid' / 'archives' / f'{sequence}.zip'
+videos = [v for v in data['videos'] if all(
+    Path(name).parent.as_posix() == sequence for name in v['file_names']
+)]
+assert len(videos) == 1, 'Expected exactly one matching video'
+video = videos[0]
+valid = root / 'youtube_vis_longtrack' / 'valid'
+archive = valid / 'archives' / f'{sequence}.zip'
 archive.parent.mkdir(parents=True, exist_ok=True)
 with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_STORED) as output:
-    for image in data['images']:
-        name = image['file_name']
-        output.write(root / 'valid' / 'JPEGImages' / name, arcname=name)
-print(f'{archive}: {len(data["images"])} images')
+    for name in video['file_names']:
+        output.write(valid / 'JPEGImages' / name, arcname=name)
+print(f'{archive}: {video["length"]} images')
 PY
 ```
 
-ZIP 内应保留 `dancetrack0004/00000001.jpg` 这样的路径，与 JSON 的 `images[].file_name` 一致。
+ZIP 内应保留 `dancetrack0041__p1/00000001.jpg` 这样的路径，与 JSON 的 `videos[].file_names` 一致。
 上述命令会读取软链接指向的真实图片内容，不会把软链接本身打进 ZIP。
 
 ## 2. 创建 Project 和标签
 
 1. 点击顶部 **Projects**，点击 **＋ → Create new project**。
-2. **Name** 填写 `YTVIS-DanceTrack-valid`。
-3. 在 **Labels / Constructor** 中新增标签，名称填写 `pedestrian`，形状类型选择 **Any**。
+2. **Name** 填写 `LongTrack-valid`。
+3. 在 **Labels / Constructor** 中新增标签，名称填写 `person`，形状类型选择 **Any**。
    标签名称需要与 JSON 的 `categories[].name` 完全一致。
 4. 为该标签添加以下两个属性，输入类型都选择 **Text**，默认值可留空；保持 **Mutable** 关闭。
 5. 保存标签，点击 **Submit & Open**。
 
 | 属性名 | 含义 | 示例值 |
 | --- | --- | --- |
-| `video_id` | 原始 YTVIS 视频 ID | `1` |
-| `instance_id` | 该视频内的实例 ID | `1` |
+| `video_id` | 原始 YTVIS `videos[].id` | `9` |
+| `instance_id` | 原始 YTVIS `annotations[].id` | `55` |
 
-这两个属性用于保留视频中的目标身份。标注 JSON 中应将它们放入 `attributes`，值使用字符串，例如：
-
-```json
-{"attributes": {"video_id": "1", "instance_id": "1"}}
-```
-
-仅放在 annotation 顶层的自定义 ID 不应作为往返导出的唯一依据。CVAT 界面中的对象编号也不等于
-YTVIS 的 `instance_id`；同一个人在不同帧中的 CVAT 对象编号可以不同。
+YTVIS 导入器会自动填写这两个属性，无需修改源 JSON。这里的 `instance_id` 是原始轨迹标注的
+`id`，不是 `source_track_id`。本例轨迹 ID 为 `55`–`76`。CVAT 界面中的对象编号也不等于
+`instance_id`；同一个人在不同帧中的 CVAT 对象编号可以不同。
 
 ## 3. 在 Project 中创建 Task
 
 1. 在项目内选择 **＋ → Create new task**，确认 **Project** 指向刚创建的项目。
-2. **Name** 填写 `valid-dancetrack0004`，**Subset** 可填写 `valid`。
-3. 标签沿用 Project 的 `pedestrian`，无需在 Task 中重新创建。
-4. 在 **Select files / My computer** 上传 `valid/archives/dancetrack0004.zip`。
+2. **Name** 填写 `valid-dancetrack0041__p1`，**Subset** 可填写 `valid`。
+3. 标签沿用 Project 的 `person`，无需在 Task 中重新创建。
+4. 在 **Select files / My computer** 上传 `dancetrack0041__p1.zip`。
    这里上传图片 ZIP；标注 JSON 在下一步上传。
 5. 在 **Advanced configuration** 中将 **Sorting method** 设为 **Lexicographical**。
    本例文件名已补零，因此这种排序与帧顺序一致。保持帧步长为 `1`，不跳帧、不裁剪帧范围。
@@ -103,19 +101,26 @@ YTVIS 的 `instance_id`；同一个人在不同帧中的 CVAT 对象编号可以
 
 1. 回到 **Task 详情页**，打开 **Actions → Upload annotations**。
    部分界面将该入口标为 **Import annotations**。
-2. 格式选择 **COCO 1.0**。
-3. 上传 `annotations/valid_pseudo/dancetrack0004.json`，等待导入完成。
+2. 格式选择 **YTVIS 1.0**，使用替换导入。
+3. 上传 `data/longtrack/v3/instances.json`，等待导入完成。
+   也可上传只含一份标注 JSON 的 ZIP。
 4. 打开一个 Job，检查人物掩码、标签，以及对象属性中的 `video_id`、`instance_id`。
 5. 再抽查序列中段和末段，确认标注与图片没有错帧。
 
-任务级导入会把该序列的标注分配到相应 Job。不要将完整序列 JSON 逐个重复导入每个 Job。
-在已编辑的任务上重新导入可能覆盖现有标注；先导出备份，再决定是否重新导入。
+已有掩码以普通 CVAT Mask 导入；有 bbox 但 `segmentations` 对应项为 `null` 的帧以参考矩形
+导入。本例 v3 中有 110 个这样的实例帧。掩码支持压缩或非压缩的 COCO RLE，不支持多边形列表。
+视频信息、原始轨迹 ID、GT `bboxes` 和 `source_*` 元数据通过通用 Task 来源关联记录保存；
+导入对象通过 Shape 来源关联保存原始身份。当前掩码仍由 CVAT 原有标注系统管理，
+修改掩码或移动参考矩形都不会修改 YTVIS 导出的 GT bbox。
 
-若出现 `Unknown key: Matching variant not found`，核对输入是否为逐帧 COCO：
-顶层应包含 `images`、`annotations`、`categories`；掩码 `segmentation` 应使用有效的 COCO 编码。
-本例使用 `{"size": [height, width], "counts": "..."}` 形式的压缩 RLE，`counts` 是字符串，
-`attributes` 中的两个 ID 也是字符串。`image_id`、`category_id`、坐标等数值字段仍应保持数值。
-不要通过修改扩展名把原始 YTVIS 文件伪装成 COCO。
+任务级导入会把该序列的标注分配到相应 Job。不要将完整序列 JSON 逐个重复导入每个 Job。
+替换导入会清理旧的 Task 来源基线，成功导入 YTVIS 后建立新基线；导入失败会回滚。
+因此，改用其他格式替换 Task 或其中某个 Job 的标注后，需要重新导入 YTVIS 才能使用该格式导出。
+在已编辑的任务上重新导入会覆盖现有标注；先导出备份，再决定是否重新导入。
+
+已有逐帧 COCO 文件仍可选择 **COCO 1.0**：它会独立保留 RLE 掩码的原始 `bbox`，但不会建立
+YTVIS 视频来源基线，因此不能直接使用 YTVIS 导出。COCO 路线需要在标注的 `attributes` 中
+提供两个身份属性，并自行完成逐帧与轨迹格式转换。不要把原始 YTVIS 当作 COCO 上传。
 
 ## 5. 用 SAM 修正已有目标
 
@@ -144,9 +149,14 @@ YTVIS 的 `instance_id`；同一个人在不同帧中的 CVAT 对象编号可以
 修正模式使用完整图片，并保留像素掩码；ROI、从框开始、转换为多边形的选项在此模式下不可用。
 原目标在预览期间会暂时隐藏，取消后恢复。SAM 仅修正当前帧，不会自动修改相邻帧或传播实例 ID。
 
-对于少量边缘像素，可使用掩码编辑工具的画笔和橡皮擦继续处理。对于漏标目标，先清除选择，
-再使用 SAM 创建新掩码；确认其 `pedestrian` 标签，并手动填写正确的 `video_id` 和 `instance_id`。
-同一视频内，同一人的实例 ID 应保持一致；新增人物使用未占用的实例 ID。
+对于少量边缘像素，可使用掩码编辑工具的画笔和橡皮擦继续处理。补齐参考矩形对应的缺失掩码时，
+先记下矩形的 `video_id` 和 `instance_id`，清除选择，再使用 SAM 或画笔创建新 Mask；
+确认标签为 `person`，并填写相同的两个属性。参考矩形可保留，也可删除；导出会使用新 Mask。
+同一目标同一帧只能有一个 Mask，重复 Mask 会阻止导出。
+
+当前支持精修和补齐原有轨迹，不分配全新轨迹 ID。新画的 Mask 必须关联导入时已有的轨迹。
+已导入对象的来源身份与显示属性必须一致，修改身份属性为另一个目标会阻止导出。
+删除 Mask 后导出该帧的 `segmentation` 和 `area` 为 `null`，原始 bbox 仍保留。
 
 ## 6. 逐帧核验与导出
 
@@ -156,30 +166,48 @@ YTVIS 的 `instance_id`；同一个人在不同帧中的 CVAT 对象编号可以
 完成一个序列后：
 
 1. 保存所有已修改的 Job，回到该 **Task 详情页**。
-2. 选择 **Actions → Export task dataset**，格式选择 **COCO 1.0**。
+2. 选择 **Actions → Export task dataset**，格式选择 **YTVIS 1.0**。
 3. 已保留原图时关闭 **Save images**，只导出标注；需要完整交付数据集时再开启。
 4. 等待导出请求完成；如跳转到 **Requests** 页面，在对应请求完成后下载 ZIP。
-5. 将结果保存到独立目录，例如 `corrected/dancetrack0004/`，保留原始伪标注。
-6. 解压检查 `annotations/` 下的 JSON，确认图片路径、掩码及两个 ID 属性仍然存在。
+5. 将结果保存到独立目录，例如 `corrected/dancetrack0041__p1/`，保留原始标注。
+6. 解压检查 `annotations/instances.json`，确认视频 ID、轨迹 ID、图片路径和 GT bbox 保持不变。
    先用一个小任务验证导出结果可重新导入，再批量处理其他序列。
 
-COCO 导出仍然是逐帧标注，不会自动变回 YTVIS。需要 YTVIS 时，后处理应依据图片文件名、原始帧顺序及
-`video_id + instance_id` 将逐帧掩码合并，恢复视频的 `length`、尺寸和每帧 `segmentations`；
-未出现目标的帧填入对应的空值。不要直接把 COCO JSON 重命名为 `pseudo_instances.json`。
+导出会聚合所有 Job，按原视频顺序写出轨迹级 `segmentations` 和重新计算的 `areas`，保留
+原始 `bboxes`、视频信息和来源元数据。结果只包含当前 Task 对应的视频，合回完整数据集时应按
+`video_id` 替换该视频及其标注，保留其他视频。启用 **Save images** 时，图片位于 ZIP 的
+`images/<原始 file_name>` 下。
 
 需要恢复整个 CVAT 项目结构时，另外使用 Project/Task 的 **Backup** 功能。它与用于训练或评估的
-COCO 导出用途不同。
+YTVIS 导出用途不同；Task 关联的原始信息也会随备份恢复。
 
 ## 7. 常见问题
 
 | 现象 | 处理 |
 | --- | --- |
-| 图片存在但标注找不到对应帧 | 对照 ZIP 内路径与 JSON 的 `file_name`，确认序列一致、未跳帧 |
-| 导入后只有框或多边形 | 检查 `segmentation` 是否为预期的掩码 RLE，是否误用了检测标注文件 |
-| `video_id` / `instance_id` 丢失 | 检查 Project 的同名 Text 属性及 JSON 的 `attributes`，再做小任务往返验证 |
+| 导入提示需要完整视频 | 对照 ZIP 内路径与 `videos[].file_names`，确认目录前缀、帧数、尺寸一致，未跳帧或删除帧 |
+| 导入后部分目标只有框 | 源数据对应帧缺失 mask，以参考矩形显示；补画 Mask 并复制两个身份属性 |
+| 导入提示缺少属性 | 为标签添加同名 Text 属性 `video_id`、`instance_id`，关闭 Mutable |
+| 导出提示身份错误或重复 Mask | 检查两个属性是否指向原有轨迹，并删除同一帧同一轨迹的多余 Mask |
+| 格式列表没有 YTVIS 1.0 | 更新后端及 worker 镜像，执行数据库迁移至 `0111_ann_sources`，刷新页面 |
 | AI Tools 中没有 SAM | 按 [安装指南](../INSTALL.md#7-验证与使用) 检查 Nuclio 函数是否为 `ready` |
 | 没有 `Refine object #…` | 确认选中单个 Mask，模型为 Segment Anything；多边形、框和多选不进入该模式 |
 | Interact 无法点击 | 解锁并显示目标；确认当前 Job 可编辑、模型已加载 |
 | 切换模型后结果异常 | 按 [SAM 配置说明](../serverless/pytorch/facebookresearch/sam/README.md) 检查 `cvat.json`，重启 SAM 后刷新网页 |
 
 其他序列重复第 3～6 节即可；标签和属性继续沿用同一个 Project。
+
+## 8. 来源数据的存储边界
+
+Task 和 Shape 的来源信息统一使用 `ann_sources`，其结构为
+`{"format": "COCO 1.0", "data": {"ref_bbox": [x, y, width, height]}}` 这样的格式标识与载荷。
+参考框的内部名称是 `ref_bbox`；COCO/YTVIS 文件仍按各自标准使用 `bbox`/`bboxes`，
+原数据的 `source_bboxes` 等来源字段也保持原名。
+
+通用模型、标注读写、前端和备份只保存及传递来源载荷，不解释参考框或视频结构。
+字段校验、参考框导出和原始身份重建由格式适配器负责。Shape 更新省略 `ann_sources`
+时保留原关联，显式传入 `null` 时解除关联；删除 Shape 会删除其关联记录。
+普通标注删除保留 Task 来源基线，因此删除全部 Mask 后仍可导出原始轨迹与 GT bbox。
+
+迁移 `0111_ann_sources` 会转换旧数据库的专用记录，备份导入也兼容旧字段。
+前端应与后端一起更新，以便在对象序列化时保留通用来源载荷。

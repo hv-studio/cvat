@@ -7967,6 +7967,33 @@ components:
         * `project` - PROJECT
         * `server` - SERVER
         * `all` - ALL
+    AnnSources:
+      type: object
+      description: Opaque, format-owned metadata carried with an annotation.
+      properties:
+        format:
+          type: string
+          maxLength: 64
+        data:
+          type: object
+          additionalProperties: {}
+      required:
+      - data
+      - format
+    AnnSourcesRequest:
+      type: object
+      description: Opaque, format-owned metadata carried with an annotation.
+      properties:
+        format:
+          type: string
+          minLength: 1
+          maxLength: 64
+        data:
+          type: object
+          additionalProperties: {}
+      required:
+      - data
+      - format
     AnnotationConflict:
       type: object
       properties:
@@ -10074,6 +10101,10 @@ components:
           maximum: 1
           minimum: 0
           default: 1.0
+        ann_sources:
+          allOf:
+          - $ref: '#/components/schemas/AnnSources'
+          nullable: true
         elements:
           type: array
           items:
@@ -10136,6 +10167,10 @@ components:
           maximum: 1
           minimum: 0
           default: 1.0
+        ann_sources:
+          allOf:
+          - $ref: '#/components/schemas/AnnSourcesRequest'
+          nullable: true
         elements:
           type: array
           items:
@@ -13402,6 +13437,10 @@ components:
           maximum: 1
           minimum: 0
           default: 1.0
+        ann_sources:
+          allOf:
+          - $ref: '#/components/schemas/AnnSources'
+          nullable: true
       required:
       - frame
       - label_id
@@ -13460,6 +13499,10 @@ components:
           maximum: 1
           minimum: 0
           default: 1.0
+        ann_sources:
+          allOf:
+          - $ref: '#/components/schemas/AnnSourcesRequest'
+          nullable: true
       required:
       - frame
       - label_id

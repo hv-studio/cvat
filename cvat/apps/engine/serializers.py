@@ -4215,6 +4215,13 @@ class ShapeSerializer(serializers.Serializer):
         return attrs
 
 
+class AnnSourcesSerializer(serializers.Serializer):
+    """Opaque, format-owned metadata carried with an annotation."""
+
+    format = serializers.CharField(max_length=64)
+    data = serializers.DictField(child=serializers.JSONField())
+
+
 class SubLabeledShapeSerializer(
     ShapeSerializer,
     AnnotationSerializer,
@@ -4222,7 +4229,7 @@ class SubLabeledShapeSerializer(
     AttributedAnnotationSerializer,
     ScoredAnnotationSerializer,
 ):
-    pass
+    ann_sources = AnnSourcesSerializer(required=False, allow_null=True)
 
 
 class LabeledShapeSerializer(SubLabeledShapeSerializer):
@@ -4297,6 +4304,8 @@ class LabeledShapeSerializerFromDB(serializers.BaseSerializer):
                 ],
             )
             result["attributes"] = _convert_attributes(shape["attributes"])
+            if shape.get("ann_sources") is not None:
+                result["ann_sources"] = shape["ann_sources"]
             if shape.get("elements", None) is not None and shape["parent"] is None:
                 result["elements"] = [convert_shape(element) for element in shape["elements"]]
             return result

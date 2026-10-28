@@ -3,7 +3,7 @@
 //
 // SPDX-License-Identifier: MIT
 
-import { omit } from 'lodash';
+import { cloneDeep, omit } from 'lodash';
 import ObjectState, { type SerializedData } from '../object-state';
 import { ScriptingError } from '../exceptions';
 import { ObjectType, HistoryActions } from '../enums';
@@ -19,6 +19,7 @@ export class Shape extends ScoredMixin(Drawn) {
     public outside: boolean;
     public rotation: number;
     public zOrder: number;
+    private annSources: SerializedShape['ann_sources'];
 
     constructor(
         data: SerializedShape | SerializedShape['elements'][0],
@@ -32,6 +33,7 @@ export class Shape extends ScoredMixin(Drawn) {
         this.occluded = data.occluded || false;
         this.outside = data.outside || false;
         this.zOrder = data.z_order;
+        this.annSources = cloneDeep(data.ann_sources);
     }
 
     protected withContext(): ReturnType<Drawn['withContext']> & {
@@ -66,6 +68,10 @@ export class Shape extends ScoredMixin(Drawn) {
 
         if (typeof this._serverId === 'number') {
             result.id = this._serverId;
+        }
+
+        if (this.annSources) {
+            result.ann_sources = cloneDeep(this.annSources);
         }
 
         if (isChildObject(this._parentId)) {

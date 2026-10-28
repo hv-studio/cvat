@@ -12,6 +12,18 @@ import numpy as np
 from pycocotools import mask as mask_utils
 
 
+def validate_ref_bbox(bbox: list[float]) -> None:
+    """Validate an imported reference box in XYWH coordinates."""
+    if (
+        not isinstance(bbox, list)
+        or len(bbox) != 4
+        or any(not isinstance(value, (int, float)) or not math.isfinite(value) for value in bbox)
+        or bbox[2] < 0
+        or bbox[3] < 0
+    ):
+        raise ValueError("Invalid ref_bbox; expected four finite XYWH values with nonnegative size")
+
+
 class RotatedBoxesToPolygons(dm.ItemTransform):
     def _rotate_point(self, p, angle, cx, cy):
         [x, y] = p

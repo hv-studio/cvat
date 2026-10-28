@@ -7,12 +7,16 @@ import zipfile
 from pathlib import Path
 from typing import BinaryIO
 
-from datumaro.components.annotation import AnnotationType
+from datumaro.components.annotation import AnnotationType, Bbox
 from datumaro.components.dataset import StreamDataset
 from datumaro.components.transformer import ItemTransform
+from datumaro.plugins.data_formats.coco.base import CocoInstancesBase
 from datumaro.plugins.data_formats.coco.importer import CocoImporter
 
 from cvat.apps.dataset_manager.bindings import (
+    ANN_SOURCES_ATTRIBUTE,
+    CvatExportError,
+    CvatToDmAnnotationConverter,
     GetCVATDataExtractor,
     NoMediaInAnnotationFileError,
     detect_dataset,
@@ -21,14 +25,64 @@ from cvat.apps.dataset_manager.bindings import (
 from cvat.apps.dataset_manager.util import make_zip_archive
 
 from .registry import dm_env, exporter, importer
-from .transformations import EllipsesToMasks
+from .transformations import EllipsesToMasks, validate_ref_bbox
 
 _REQUIRE_ISCROWD = False
 
 
+class CocoInstancesWithRefBbox(CocoInstancesBase):
+    """Keep a mask's reference box while retaining Datumaro's streaming importer."""
+
+    def _load_annotations(self, ann: dict, image_info=None, parsed_annotations=None) -> list:
+        start = len(parsed_annotations) if parsed_annotations is not None else 0
+        anns = super()._load_annotations(ann, image_info, parsed_annotations)
+        masks = [item for item in anns[start:] if item.type == AnnotationType.mask]
+        bbox = ann.get("bbox")
+        if bbox is not None and masks:
+            validate_ref_bbox(bbox)
+            for mask in masks:
+                mask.attributes[ANN_SOURCES_ATTRIBUTE] = {
+                    "format": "COCO 1.0",
+                    "data": {"ref_bbox": bbox},
+                }
+        return anns
+
+
+dm_env.extractors.register("coco_instances", CocoInstancesWithRefBbox)
+
+
+class CocoAnnConverter(CvatToDmAnnotationConverter):
+    """Export reference boxes through Datumaro's grouped mask/box representation."""
+
+    def _convert_shape(self, shape, *, index: int) -> list:
+        anns = list(super()._convert_shape(shape, index=index))
+        source = getattr(shape, "ann_sources", None)
+        bbox = source["data"].get("ref_bbox") if source else None
+        if shape.type == "mask" and bbox is not None:
+            try:
+                validate_ref_bbox(bbox)
+            except ValueError as error:
+                raise CvatExportError(str(error)) from error
+            mask = anns[0]
+            mask.group = mask.group or -(index + 1)
+            anns.append(
+                Bbox(*bbox, label=mask.label, group=mask.group, attributes=mask.attributes.copy())
+            )
+        return anns
+
+
+def _convert_anns(*args, **kwargs) -> list:
+    return CocoAnnConverter(*args, **kwargs).convert()
+
+
 @exporter(name="COCO", ext="ZIP", version="1.0")
 def _export_instances(dst_file, temp_dir, instance_data, save_images=False):
-    with GetCVATDataExtractor(instance_data, include_images=save_images) as extractor:
+    with GetCVATDataExtractor(
+        instance_data,
+        include_images=save_images,
+        format_type="coco_instances",
+        convert_annotations=_convert_anns,
+    ) as extractor:
         dataset = StreamDataset.from_extractors(extractor, env=dm_env)
         dataset.transform(EllipsesToMasks)
         dataset.export(temp_dir, "coco_instances", save_media=save_images, merge_images=False)
