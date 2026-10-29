@@ -46,9 +46,12 @@ export class BBoxMaskShape extends Shape {
     public get(frame: number): ReturnType<Shape['get']> & { elements: SerializedData[] } {
         return {
             ...super.get(frame),
+            hidden: this.hidden || this.elements.filter((element) => !element.removed)
+                .every((element) => element.hidden),
             updated: Math.max(this.updated, ...this.elements.map((element) => element.updated)),
             elements: this.elements.filter((element) => !element.removed).map((element) => ({
                 ...element.get(frame),
+                updated: Math.max(this.updated, element.updated),
                 label: this.label,
                 color: this.color,
                 group: this.groupObject,
@@ -96,7 +99,7 @@ export class BBoxMaskShape extends Shape {
     }
 
     public save(frame: number, data: ObjectState): ObjectState {
-        if (this.lock && data.lock) return new ObjectState(this.get(frame));
+        if (this.lock && data.lock && !data.updateFlags.hidden) return super.save(frame, data);
         const { elements } = data;
         if (data.updateFlags.elements) {
             const types = elements.map((element) => element.shapeType);
@@ -108,6 +111,14 @@ export class BBoxMaskShape extends Shape {
         }
         const ownsTransaction = this.history.beginTransaction(HistoryActions.CHANGED_ELEMENTS);
         try {
+            if (data.updateFlags.hidden) {
+                for (const element of this.elements.filter((part) => !part.removed)) {
+                    const state = new ObjectState(element.get(frame));
+                    state.hidden = data.hidden;
+                    element.save(frame, state);
+                }
+            }
+            if (this.lock && data.lock) return super.save(frame, data);
             if (data.updateFlags.elements) {
                 const previous = this.elements;
                 const next = elements.map((state) => {

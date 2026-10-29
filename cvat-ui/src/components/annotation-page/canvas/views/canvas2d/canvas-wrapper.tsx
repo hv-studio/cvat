@@ -648,7 +648,9 @@ class CanvasWrapperComponent extends React.PureComponent<Props> {
             prevProps.annotations !== annotations ||
             prevProps.frameData !== frameData ||
             prevProps.hiddenZLayers !== hiddenZLayers ||
-            prevProps.renderData !== renderData
+            prevProps.renderData !== renderData ||
+            prevProps.activeObjectHidden !== this.props.activeObjectHidden ||
+            prevProps.editedState !== this.props.editedState
         ) {
             this.updateCanvas();
         } else if (prevProps.imageFilters !== imageFilters) {
@@ -753,7 +755,7 @@ class CanvasWrapperComponent extends React.PureComponent<Props> {
     private onCanvasShapeDrawn = (event: any): void => {
         const {
             jobInstance, activeLabelID, activeObjectType, frame, updateActiveControl, onCreateAnnotations,
-            onUpdateEditedObject, activeObjectHidden, workspace, currentZLayer,
+            onUpdateEditedObject, currentZLayer,
         } = this.props;
 
         if (!event.detail.continue) {
@@ -773,7 +775,7 @@ class CanvasWrapperComponent extends React.PureComponent<Props> {
         state.zOrder = currentZLayer;
         state.occluded = state.occluded || false;
         state.outside = state.outside || false;
-        state.hidden = state.hidden || (activeObjectHidden && workspace !== Workspace.SINGLE_SHAPE);
+        state.hidden = state.hidden || false;
         if (state.shapeType === ShapeType.SKELETON && Array.isArray(state.elements)) {
             state.elements.forEach((element: Record<string, any>) => {
                 element.objectType = state.objectType;
@@ -1174,7 +1176,7 @@ class CanvasWrapperComponent extends React.PureComponent<Props> {
     private updateCanvas(): void {
         const {
             hiddenZLayers, annotations, frameData,
-            workspace, frame, imageFilters, renderData,
+            workspace, frame, imageFilters, renderData, activeObjectHidden, editedState,
         } = this.props;
 
         const { canvasInstance } = this.props as { canvasInstance: Canvas };
@@ -1183,7 +1185,22 @@ class CanvasWrapperComponent extends React.PureComponent<Props> {
                 frame,
                 workspace,
                 exclude: [ObjectType.TAG],
-            }).filter((state: ObjectState): boolean => !hiddenZLayers.has(state.zOrder));
+            }).filter((state: ObjectState): boolean => !hiddenZLayers.has(state.zOrder)).map((state: ObjectState) => {
+                if (activeObjectHidden && state.shapeType === ShapeType.BBOX_MASK &&
+                    (state.clientID === editedState?.parentID || state.clientID === editedState?.clientID)) {
+                    // Override only the canvas view; leaving the editor restores the original visibility.
+                    return new Proxy(state, {
+                        get: (target, prop, receiver) => (prop === 'elements' ? target.elements.map((element) => (
+                            new Proxy(element, {
+                                get: (part, key, partReceiver) => (
+                                    key === 'hidden' ? true : Reflect.get(part, key, partReceiver)
+                                ),
+                            })
+                        )) : Reflect.get(target, prop, receiver)),
+                    });
+                }
+                return state;
+            });
             const proxy = new Proxy(frameData, {
                 get: (_frameData, prop, receiver) => {
                     if (prop === 'data') {

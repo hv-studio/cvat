@@ -260,6 +260,11 @@ export class Shape extends ScoredMixin(Drawn) {
         }
 
         if (this.lock && data.lock) {
+            // Visibility is a view preference, independent of geometry locking.
+            if (data.updateFlags.hidden) {
+                this.saveHidden(data.hidden, frame);
+                this.updated = Date.now();
+            }
             return new ObjectState(this.get(frame));
         }
 

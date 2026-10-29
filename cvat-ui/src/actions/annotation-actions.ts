@@ -2351,7 +2351,7 @@ export function updateEditedStateAsync(objectState: ObjectState | null): ThunkAc
         const state = getState();
         const { activeObjectHidden } = state.annotation.canvas;
         if (activeObjectHidden !== newActiveObjectHidden) {
-            dispatch(changeHideActiveObjectAsync(newActiveObjectHidden));
+            dispatch(changeHideActiveObjectAsync(newActiveObjectHidden, false));
         }
     };
 }

@@ -1060,6 +1060,7 @@ export class CanvasViewImpl implements CanvasView, Listener {
                 // object has been changed or changed frame for a track
                 if (
                     drawnState.updated !== state.updated ||
+                    drawnState.hidden !== state.hidden ||
                     drawnState.frame !== state.frame ||
                     this.skeletonElementsVisibilityChanged(state)
                 ) {

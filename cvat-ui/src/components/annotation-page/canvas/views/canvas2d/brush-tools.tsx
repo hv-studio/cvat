@@ -125,7 +125,7 @@ function BrushTools(): React.ReactPortal | null {
     }, [setCurrentTool, blockedTools['polygon-minus']]);
 
     const hideMask = useCallback((hide: boolean) => {
-        dispatch(changeHideActiveObjectAsync(hide));
+        dispatch(changeHideActiveObjectAsync(hide, false));
     }, []);
 
     const handlers: Record<keyof typeof componentShortcuts, (event?: KeyboardEvent) => void> = {
@@ -397,7 +397,7 @@ function BrushTools(): React.ReactPortal | null {
                     onClick={toggleRemoveUnderlyingPixels}
                 />
             </CVATTooltip>
-            <CVATTooltip title={`Hide mask ${normalizedKeyMap.SWITCH_HIDDEN}`}>
+            <CVATTooltip title={`Temporarily hide object ${normalizedKeyMap.SWITCH_HIDDEN}`}>
                 <Button
                     type='text'
                     className={['cvat-brush-tools-hide', ...(activeObjectHidden ? ['cvat-brush-tools-active-tool'] : [])].join(' ')}

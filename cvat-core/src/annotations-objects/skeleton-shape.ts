@@ -242,7 +242,7 @@ export class SkeletonShape extends Shape {
     }
 
     public save(frame: number, data: ObjectState): ObjectState {
-        if (this.lock && data.lock) {
+        if (this.lock && data.lock && !data.elements.some((element) => element.updateFlags.hidden)) {
             return new ObjectState(this.get(frame));
         }
 
