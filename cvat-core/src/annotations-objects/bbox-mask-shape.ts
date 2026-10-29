@@ -4,6 +4,8 @@
 
 import ObjectState, { SerializedData } from '../object-state';
 import config from '../config';
+import { getSaveAction } from '../annotations-history';
+import type { Label } from '../labels';
 import { MaskShape } from './mask-shape';
 import { ArgumentError } from '../exceptions';
 import { ShapeType, HistoryActions } from '../enums';
@@ -46,7 +48,7 @@ export class BBoxMaskShape extends Shape {
     public get(frame: number): ReturnType<Shape['get']> & { elements: SerializedData[] } {
         return {
             ...super.get(frame),
-            hidden: this.hidden || this.elements.filter((element) => !element.removed)
+            hidden: this.elements.filter((element) => !element.removed)
                 .every((element) => element.hidden),
             updated: Math.max(this.updated, ...this.elements.map((element) => element.updated)),
             elements: this.elements.filter((element) => !element.removed).map((element) => ({
@@ -57,7 +59,6 @@ export class BBoxMaskShape extends Shape {
                 group: this.groupObject,
                 zOrder: this.zOrder,
                 annSources: this.annSources,
-                hidden: this.hidden || element.hidden,
                 lock: this.lock || element.lock,
                 outside: this.outside || element.outside,
             })),
@@ -69,7 +70,6 @@ export class BBoxMaskShape extends Shape {
             ...super.toJSON(),
             elements: this.elements.filter((element) => !element.removed).map((element) => ({
                 ...element.toJSON(),
-                label_id: this.label.id,
                 group: this.group,
                 z_order: this.zOrder,
                 frame: this.frame,
@@ -98,6 +98,29 @@ export class BBoxMaskShape extends Shape {
         });
     }
 
+    protected saveHidden(hidden: boolean, frame: number): void {
+        for (const element of this.elements.filter((part) => !part.removed)) {
+            const state = new ObjectState(element.get(frame));
+            state.hidden = hidden;
+            element.save(frame, state);
+        }
+    }
+
+    protected saveLabel(label: Label, frame: number): void {
+        super.saveLabel(label, frame);
+        for (const element of this.elements) {
+            const state = new ObjectState(element.get(frame));
+            state.label = label;
+            const { lock } = element;
+            try {
+                element.lock = false;
+                element.save(frame, state);
+            } finally {
+                element.lock = lock;
+            }
+        }
+    }
+
     public save(frame: number, data: ObjectState): ObjectState {
         if (this.lock && data.lock && !data.updateFlags.hidden) return super.save(frame, data);
         const { elements } = data;
@@ -109,15 +132,8 @@ export class BBoxMaskShape extends Shape {
                 throw new ArgumentError('Expected one rectangle and/or one mask with the same frame and label');
             }
         }
-        const ownsTransaction = this.history.beginTransaction(HistoryActions.CHANGED_ELEMENTS);
+        const ownsTransaction = this.history.beginTransaction(getSaveAction([data]) ?? HistoryActions.CHANGED_OBJECTS);
         try {
-            if (data.updateFlags.hidden) {
-                for (const element of this.elements.filter((part) => !part.removed)) {
-                    const state = new ObjectState(element.get(frame));
-                    state.hidden = data.hidden;
-                    element.save(frame, state);
-                }
-            }
             if (this.lock && data.lock) return super.save(frame, data);
             if (data.updateFlags.elements) {
                 const previous = this.elements;

@@ -26,52 +26,10 @@ import config from './config';
 import {
     HistoryActions, ShapeType, ObjectType, colors, Source, DimensionType, JobType,
 } from './enums';
-import AnnotationHistory from './annotations-history';
+import AnnotationHistory, { getSaveAction } from './annotations-history';
 
 type AnnotationObject = Shape | Tag | Track | AudioInterval;
 type AnnotationState = ObjectState | AudioIntervalState;
-
-const SAVE_ACTION_BY_PROPERTY: Readonly<Record<string, HistoryActions>> = {
-    label: HistoryActions.CHANGED_LABEL,
-    attributes: HistoryActions.CHANGED_ATTRIBUTES,
-    points: HistoryActions.CHANGED_POINTS,
-    rotation: HistoryActions.CHANGED_ROTATION,
-    outside: HistoryActions.CHANGED_OUTSIDE,
-    occluded: HistoryActions.CHANGED_OCCLUDED,
-    zOrder: HistoryActions.CHANGED_ZORDER,
-    keyframe: HistoryActions.CHANGED_KEYFRAME,
-    lock: HistoryActions.CHANGED_LOCK,
-    pinned: HistoryActions.CHANGED_PINNED,
-    color: HistoryActions.CHANGED_COLOR,
-    hidden: HistoryActions.CHANGED_HIDDEN,
-    position: HistoryActions.CHANGED_AUDIO_POSITION,
-};
-
-function getSaveAction(states: AnnotationState[]): HistoryActions | null {
-    const actions = new Set<HistoryActions>();
-    const collectActions = (state: AnnotationState): void => {
-        Object.entries(state.updateFlags).forEach(([property, updated]) => {
-            if (updated) {
-                actions.add(SAVE_ACTION_BY_PROPERTY[property] ?? HistoryActions.CHANGED_OBJECTS);
-            }
-        });
-        if (state instanceof ObjectState) {
-            state.elements.forEach(collectActions);
-        }
-    };
-    states.forEach(collectActions);
-
-    if (!actions.size) {
-        return null;
-    }
-
-    if (actions.size === 2 &&
-        actions.has(HistoryActions.CHANGED_POINTS) && actions.has(HistoryActions.CHANGED_ROTATION)) {
-        return HistoryActions.CHANGED_ROTATION;
-    }
-
-    return actions.size === 1 ? [...actions][0] : HistoryActions.CHANGED_OBJECTS;
-}
 
 const validateAttributesList = (
     attributes: { spec_id: number, value: string }[],
