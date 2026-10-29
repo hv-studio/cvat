@@ -3132,6 +3132,7 @@ export class CanvasViewImpl implements CanvasView, Listener {
             points: [...state.points],
             rotation: state.rotation,
             attributes: { ...state.attributes },
+            sourceIdentity: state.sourceIdentity,
             descriptions: [...state.descriptions],
             zOrder: state.zOrder,
             pinned: state.pinned,
@@ -4379,6 +4380,12 @@ export class CanvasViewImpl implements CanvasView, Listener {
                 `${withSource ? `(${source})` : ''}`).style({
                     'text-transform': 'uppercase',
                 });
+
+                if (withID && state.sourceIdentity) {
+                    for (const [name, value] of Object.entries(state.sourceIdentity.fields)) {
+                        block.tspan(`${name}: ${value}`).attr({ dy: '1.25em', x: 0 });
+                    }
+                }
 
                 if (withLayer) {
                     block

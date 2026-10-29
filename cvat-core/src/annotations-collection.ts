@@ -1372,6 +1372,7 @@ export default class Collection {
                 if (state.objectType === 'shape') {
                     constructed.shapes.push({
                         attributes,
+                        ann_sources: state.annSources,
                         descriptions: state.descriptions,
                         frame: state.frame,
                         group: state.group?.id ?? 0,

@@ -138,6 +138,7 @@ class ObjectItemDetailsContainer extends React.PureComponent<Props> {
                     changeSize={this.changeSize}
                     sizeParams={sizeParams}
                     source={state.source}
+                    sourceIdentity={state.sourceIdentity?.fields}
                     score={state.score}
                     votes={state.votes}
                     textContent={textContent}

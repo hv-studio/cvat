@@ -3,7 +3,9 @@
 //
 // SPDX-License-Identifier: MIT
 
+import { cloneDeep } from 'lodash';
 import { Source, ShapeType, ObjectType } from './enums';
+import { getAnnIdentity, type AnnSources, type AnnIdentity } from './ann-sources';
 import PluginRegistry from './plugins';
 import { ArgumentError } from './exceptions';
 import { Label } from './labels';
@@ -26,6 +28,7 @@ export interface SerializedData {
     hidden?: boolean;
     pinned?: boolean;
     attributes?: Record<number, string>;
+    annSources?: AnnSources;
     group?: { color: string; id: number; };
     color?: string;
     updated?: number;
@@ -77,6 +80,8 @@ export default class ObjectState {
     } | null;
     public readonly score: number | undefined;
     public readonly votes: number | undefined;
+    public readonly annSources: AnnSources;
+    public readonly sourceIdentity: AnnIdentity | null;
     public label: Label;
     public color: string;
     public hidden: boolean;
@@ -140,6 +145,7 @@ export default class ObjectState {
         const data = {
             label: serialized.label,
             attributes: {},
+            annSources: cloneDeep(serialized.annSources),
             descriptions: [],
             elements: Array.isArray(serialized.elements) ?
                 serialized.elements.map((element) => new ObjectState(element)) : null,
@@ -190,6 +196,12 @@ export default class ObjectState {
                 },
                 source: {
                     get: () => data.source,
+                },
+                annSources: {
+                    get: () => cloneDeep(data.annSources),
+                },
+                sourceIdentity: {
+                    get: () => getAnnIdentity(data.annSources),
                 },
                 isGroundTruth: {
                     get: () => data.source === Source.GT,
@@ -504,6 +516,7 @@ export default class ObjectState {
             hidden: this.hidden,
             pinned: this.pinned,
             attributes: this.attributes,
+            annSources: this.annSources,
             color: this.color,
             updated: this.updated,
             source: this.source,

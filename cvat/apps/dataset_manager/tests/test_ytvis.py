@@ -25,10 +25,6 @@ class YtvisTest(TestCase):
         data = models.Data.objects.create(size=3, stop_frame=2, image_quality=75)
         cls.task = models.Task.objects.create(name="YTVIS", data=data, mode="annotation", overlap=0)
         cls.label = models.Label.objects.create(task=cls.task, name="person")
-        for name in ("video_id", "instance_id"):
-            models.AttributeSpec.objects.create(
-                label=cls.label, name=name, input_type="text", mutable=False
-            )
         for start, stop in ((0, 1), (2, 2)):
             segment = models.Segment.objects.create(
                 task=cls.task, start_frame=start, stop_frame=stop
@@ -129,6 +125,8 @@ class YtvisTest(TestCase):
             with self.subTest(use_zip=use_zip):
                 self._import(use_zip=use_zip)
                 self.assertEqual(models.LabeledShapeSource.objects.count(), 3)
+                self.assertFalse(self.label.attributespec_set.exists())
+                self.assertFalse(models.LabeledShapeAttributeVal.objects.exists())
                 self.assertEqual(models.LabeledShape.objects.filter(type="rectangle").count(), 1)
                 output = self._export()
                 self.assertEqual(output, {**self.source, "videos": [self.source["videos"][1]]})
@@ -143,7 +141,6 @@ class YtvisTest(TestCase):
         reference = next(shape for shape in anns.data["shapes"] if shape["type"] == "rectangle")
         new_mask = deepcopy(reference)
         new_mask.pop("id")
-        new_mask.pop("ann_sources")
         new_mask["type"] = "mask"
         new_mask["points"] = MaskConverter.dm_mask_to_cvat_rle(dm.Mask(self.mask))
         anns.create({"shapes": [new_mask], "tracks": [], "tags": [], "intervals": []})
@@ -236,12 +233,17 @@ class YtvisTest(TestCase):
 
     def test_source_identity_and_replacement_import(self) -> None:
         self._import()
-        instance_attr = self.label.attributespec_set.get(name="instance_id")
-        values = models.LabeledShapeAttributeVal.objects.filter(spec=instance_attr)
-        values.update(value="")
-        # Imported identities remain linked even if their display attributes are missing.
         self.assertEqual(self._export()["annotations"], self.source["annotations"])
-        values.update(value="999")
+        source = models.LabeledShapeSource.objects.first()
+        original = deepcopy(source.data)
+        for identity in ({"video_id": 9, "instance_id": 999}, {"video_id": 10, "instance_id": 55}):
+            source.data = {"format": "YTVIS 1.0", "data": identity}
+            source.save()
+            with self.assertRaisesRegex(CvatExportError, "source identity"):
+                self._export()
+        source.data = original
+        source.save()
+        source.delete()
         with self.assertRaisesRegex(CvatExportError, "source identity"):
             self._export()
 

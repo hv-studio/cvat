@@ -3,6 +3,7 @@
 //
 // SPDX-License-Identifier: MIT
 
+import { cloneDeep } from 'lodash';
 import ObjectState, { type SerializedData } from '../object-state';
 import { ScriptingError } from '../exceptions';
 import type { Label } from '../labels';
@@ -117,6 +118,7 @@ export class SkeletonShape extends Shape {
             points: [],
             rotation: 0,
             attributes: serializeAttributes(this.attributes),
+            ann_sources: cloneDeep(this.annSources),
             elements,
             frame: this.frame,
             label_id: this.label.id,
@@ -155,6 +157,7 @@ export class SkeletonShape extends Shape {
             zOrder: this.zOrder,
             rotation: 0,
             attributes: Object.fromEntries(this.attributes),
+            annSources: cloneDeep(this.annSources),
             descriptions: [...this.descriptions],
             elements,
             label: this.label,

@@ -191,7 +191,7 @@ export class SkeletonTrack extends Track {
         return result;
     }
 
-    public get(frame: number): Omit<Required<SerializedData>, 'score' | 'votes'> {
+    public get(frame: number): Omit<Required<SerializedData>, 'score' | 'votes' | 'annSources'> {
         const { prev, next } = this.boundedKeyframes(frame);
         const position = this.getPosition(frame, prev, next);
         const elements = this.elements.map((element) => ({

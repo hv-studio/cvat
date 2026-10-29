@@ -19,7 +19,7 @@ export class Shape extends ScoredMixin(Drawn) {
     public outside: boolean;
     public rotation: number;
     public zOrder: number;
-    private annSources: SerializedShape['ann_sources'];
+    protected annSources: SerializedShape['ann_sources'];
 
     constructor(
         data: SerializedShape | SerializedShape['elements'][0],
@@ -98,6 +98,7 @@ export class Shape extends ScoredMixin(Drawn) {
             points: this.points.slice(),
             rotation: this.rotation,
             attributes: Object.fromEntries(this.attributes),
+            annSources: cloneDeep(this.annSources),
             descriptions: [...this.descriptions],
             label: this.label,
             group: this.groupObject,

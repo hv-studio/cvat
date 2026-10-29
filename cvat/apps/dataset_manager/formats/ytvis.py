@@ -83,19 +83,6 @@ def _import_ytvis(
         name = categories[category_id]
         if name not in labels:
             raise CvatImportError(f"Create the task label {name!r} before importing YTVIS")
-        attributes = {
-            attribute.name: attribute for attribute in labels[name].attributespec_set.all()
-        }
-        for attribute_name in ("video_id", "instance_id"):
-            attribute = attributes.get(attribute_name)
-            if (
-                attribute is None
-                or attribute.input_type != models.AttributeType.TEXT
-                or attribute.mutable
-            ):
-                raise CvatImportError(
-                    f"Label {name!r} needs an immutable Text attribute {attribute_name!r}"
-                )
 
     if models.LabeledShape.objects.filter(job__segment__task=task).exists():
         raise CvatImportError(
@@ -109,10 +96,6 @@ def _import_ytvis(
             raise CvatImportError(f"Invalid frame array length in YTVIS track {track['id']}")
         if "areas" in track and len(track["areas"]) != length:
             raise CvatImportError(f"Invalid areas length in YTVIS track {track['id']}")
-        attributes = [
-            instance_data.Attribute(name="video_id", value=str(video["id"])),
-            instance_data.Attribute(name="instance_id", value=str(track["id"])),
-        ]
         for index, (bbox, segmentation) in enumerate(zip(track["bboxes"], segmentations)):
             if bbox is not None:
                 try:
@@ -153,7 +136,7 @@ def _import_ytvis(
                     label=categories[track["category_id"]],
                     points=points,
                     occluded=False,
-                    attributes=attributes,
+                    attributes=[],
                     source=models.SourceType.FILE,
                     ann_sources={
                         "format": "YTVIS 1.0",
@@ -200,21 +183,14 @@ def _export_ytvis(
     for frame in instance_data.group_by_frame(include_empty=True):
         index = frame_indices[frame.idx]
         for shape in frame.labeled_shapes:
-            attributes = {attribute.name: attribute.value for attribute in shape.attributes}
             source = getattr(shape, "ann_sources", None)
-            if source and source["format"] == "YTVIS 1.0":
-                # Imported objects retain their source identity independently of display attributes.
-                identity = source["data"]
-                for name in ("video_id", "instance_id"):
-                    if attributes.get(name) not in (None, "", str(identity[name])):
-                        raise CvatExportError(
-                            f"Frame {index}: {name} conflicts with the object's source identity"
-                        )
-                    attributes[name] = str(identity[name])
-            instance_id = attributes.get("instance_id")
-            if attributes.get("video_id") != str(video["id"]) or instance_id not in tracks:
+            if not source or source["format"] != "YTVIS 1.0":
+                raise CvatExportError(f"Frame {index}: each object needs a YTVIS source identity")
+            identity = source["data"]
+            instance_id = str(identity.get("instance_id"))
+            if identity.get("video_id") != video["id"] or instance_id not in tracks:
                 raise CvatExportError(
-                    f"Frame {index}: each object needs the original video_id and instance_id"
+                    f"Frame {index}: source identity does not belong to this video"
                 )
             track = tracks[instance_id]
             if shape.label != categories[track["category_id"]]:

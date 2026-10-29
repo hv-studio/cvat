@@ -85,7 +85,7 @@ export class Track extends Drawn {
         return result;
     }
 
-    public get(frame: number): Omit<Required<SerializedData>, 'elements' | 'score' | 'votes'> {
+    public get(frame: number): Omit<Required<SerializedData>, 'elements' | 'score' | 'votes' | 'annSources'> {
         const {
             prev, next, first, last,
         } = this.boundedKeyframes(frame);

@@ -49,6 +49,7 @@ export interface DrawnState {
     points?: number[];
     rotation: number;
     attributes: Record<number, string>;
+    sourceIdentity?: { fields: Readonly<Record<string, number>> } | null;
     descriptions: string[];
     zOrder?: number;
     pinned?: boolean;
