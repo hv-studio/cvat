@@ -3,6 +3,7 @@ Import and export a complete YTVIS video for mask refinement.
 """
 
 import json
+import math
 import zipfile
 from copy import deepcopy
 from pathlib import Path, PurePosixPath
@@ -21,7 +22,19 @@ from cvat.apps.dataset_manager.util import make_zip_archive
 from cvat.apps.engine import models
 
 from .registry import exporter, importer
-from .transformations import MaskConverter, validate_ref_bbox
+from .transformations import MaskConverter
+
+
+def validate_bbox(bbox: list[float]) -> None:
+    """Validate an imported box in XYWH coordinates."""
+    if (
+        not isinstance(bbox, list)
+        or len(bbox) != 4
+        or any(not isinstance(value, (int, float)) or not math.isfinite(value) for value in bbox)
+        or bbox[2] < 0
+        or bbox[3] < 0
+    ):
+        raise ValueError("Invalid bbox; expected four finite XYWH values with nonnegative size")
 
 
 def _match_video(source: dict, instance_data: TaskData) -> tuple[dict, list[int]]:
@@ -91,26 +104,40 @@ def _import_ytvis(
 
     length = video["length"]
     for track in tracks:
+        bboxes = track.get("bboxes", [None] * length)
         segmentations = track.get("segmentations", [None] * length)
-        if len(track["bboxes"]) != length or len(segmentations) != length:
+        if len(bboxes) != length or len(segmentations) != length:
             raise CvatImportError(f"Invalid frame array length in YTVIS track {track['id']}")
         if "areas" in track and len(track["areas"]) != length:
             raise CvatImportError(f"Invalid areas length in YTVIS track {track['id']}")
-        for index, (bbox, segmentation) in enumerate(zip(track["bboxes"], segmentations)):
+        for index, (bbox, segmentation) in enumerate(zip(bboxes, segmentations)):
             if bbox is not None:
                 try:
-                    validate_ref_bbox(bbox)
+                    validate_bbox(bbox)
                 except ValueError as error:
                     raise CvatImportError(
-                        f"Invalid ref_bbox in track {track['id']}, frame {index}"
+                        f"Invalid bbox in track {track['id']}, frame {index}"
                     ) from error
             if segmentation is None and bbox is None:
                 continue
-            if segmentation is None:
+            common = dict(
+                frame=instance_data.abs_frame_id(frames[index]),
+                label=categories[track["category_id"]],
+                occluded=False,
+                attributes=[],
+                source=models.SourceType.FILE,
+            )
+            elements = []
+            if bbox is not None:
                 left, top, width, height = bbox
-                points = [left, top, left + width, top + height]
-                shape_type = models.ShapeType.RECTANGLE
-            else:
+                elements.append(
+                    instance_data.LabeledShape(
+                        type=models.ShapeType.RECTANGLE,
+                        points=[left, top, left + width, top + height],
+                        **common,
+                    )
+                )
+            if segmentation is not None:
                 if not isinstance(segmentation, dict) or segmentation.get("size") != [
                     video["height"],
                     video["width"],
@@ -128,27 +155,30 @@ def _import_ytvis(
                     raise CvatImportError(
                         f"Invalid RLE in track {track['id']}, frame {index}"
                     ) from error
-                shape_type = models.ShapeType.MASK
+                elements.append(
+                    instance_data.LabeledShape(
+                        type=models.ShapeType.MASK,
+                        points=points,
+                        **common,
+                    )
+                )
             instance_data.add_shape(
                 instance_data.LabeledShape(
-                    type=shape_type,
-                    frame=instance_data.abs_frame_id(frames[index]),
-                    label=categories[track["category_id"]],
-                    points=points,
-                    occluded=False,
-                    attributes=[],
-                    source=models.SourceType.FILE,
+                    type=models.ShapeType.BBOX_MASK,
+                    points=[],
+                    elements=elements,
+                    **common,
                     ann_sources={
                         "format": "YTVIS 1.0",
                         "data": {
                             "video_id": video["id"],
                             "instance_id": track["id"],
-                            "ref_bbox": bbox,
                         },
                     },
                 )
             )
-        # Keep identities, GT boxes and provenance without storing a second copy of the masks.
+        # Keep identities and provenance; geometry belongs only to the current components.
+        track["bboxes"] = [None] * length
         track["segmentations"] = [None] * length
         track["areas"] = [None] * length
 
@@ -180,6 +210,7 @@ def _export_ytvis(
     frame_indices = {frame: index for index, frame in enumerate(frames)}
     tracks = {str(track["id"]): track for track in output["annotations"]}
     categories = {category["id"]: category["name"] for category in output["categories"]}
+    seen = set()
     for frame in instance_data.group_by_frame(include_empty=True):
         index = frame_indices[frame.idx]
         for shape in frame.labeled_shapes:
@@ -195,23 +226,31 @@ def _export_ytvis(
             track = tracks[instance_id]
             if shape.label != categories[track["category_id"]]:
                 raise CvatExportError(f"Frame {index}: label does not match track {instance_id}")
-            if shape.type == models.ShapeType.RECTANGLE:
-                # Missing-mask reference boxes never replace the original GT boxes.
+            if shape.type != models.ShapeType.BBOX_MASK:
+                raise CvatExportError(f"Frame {index}: YTVIS requires bbox_mask instances")
+            key = (index, instance_id)
+            if key in seen:
+                raise CvatExportError(f"Frame {index}: duplicate instance for track {instance_id}")
+            seen.add(key)
+            if shape.outside:
                 continue
-            if shape.type != models.ShapeType.MASK:
-                raise CvatExportError(
-                    f"Frame {index}: YTVIS requires masks or reference rectangles"
-                )
-            if track["segmentations"][index] is not None:
-                raise CvatExportError(f"Frame {index}: duplicate mask for track {instance_id}")
-            mask = MaskConverter.cvat_rle_to_dm_rle(
-                shape._replace(label=track["category_id"], attributes={}), frame.height, frame.width
-            )
-            track["segmentations"][index] = {
-                "size": list(mask.rle["size"]),
-                "counts": mask.rle["counts"].decode("ascii"),
-            }
-            track["areas"][index] = int(mask_utils.area(mask.rle))
+            for element in shape.elements:
+                if element.outside:
+                    continue
+                if element.type == models.ShapeType.RECTANGLE:
+                    left, top, right, bottom = element.points
+                    track["bboxes"][index] = [left, top, right - left, bottom - top]
+                elif element.type == models.ShapeType.MASK:
+                    mask = MaskConverter.cvat_rle_to_dm_rle(
+                        element._replace(label=track["category_id"], attributes={}),
+                        frame.height,
+                        frame.width,
+                    )
+                    track["segmentations"][index] = {
+                        "size": list(mask.rle["size"]),
+                        "counts": mask.rle["counts"].decode("ascii"),
+                    }
+                    track["areas"][index] = int(mask_utils.area(mask.rle))
 
     root = Path(temp_dir)
     anns_dir = root / "annotations"

@@ -1580,6 +1580,7 @@ class ShapeType(str, Enum):
     CUBOID = "cuboid"  # (x0, y0, ..., x7, y7)
     MASK = "mask"  # (rle mask, left, top, right, bottom)
     SKELETON = "skeleton"
+    BBOX_MASK = "bbox_mask"  # Independent rectangle and/or mask elements
 
     @classmethod
     def choices(cls):

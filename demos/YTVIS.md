@@ -1,9 +1,8 @@
 # 用 CVAT 核验 YTVIS 掩码标注
 
 本文以 LongTrack 中的 `dancetrack0041__p1` 为例，使用本分支的 **YTVIS 1.0** 格式直接导入
-轨迹标注、使用 SAM 精修掩码，再导出 YTVIS；原始 DanceTrack GT bbox 保持不变。
-先完成 [CVAT 与 SAM 安装](../INSTALL.md)，打开
-<http://localhost:8080/> 并登录。
+轨迹标注、使用 SAM 精修掩码，再导出 YTVIS，默认锁定 bbox。
+先完成 [CVAT 与 SAM 安装](../INSTALL.md)，打开 <http://localhost:8080/> 并登录。
 
 ## 1. 准备图片与标注
 
@@ -73,11 +72,14 @@ CVAT 界面中的对象编号也不等于
 4. 打开一个 Job，检查人物掩码、标签，以及对象 Details 中的 `video_id`、`instance_id`。
 5. 再抽查序列中段和末段，确认标注与图片没有错帧。
 
-已有掩码以普通 CVAT Mask 导入；有 bbox 但 `segmentations` 对应项为 `null` 的帧以参考矩形
-导入。本例 v3 中有 110 个这样的实例帧。掩码支持压缩或非压缩的 COCO RLE，不支持多边形列表。
-视频信息、原始轨迹 ID、GT `bboxes` 和 `source_*` 元数据通过通用 Task 来源关联记录保存；
-导入对象通过 Shape 来源关联保存原始身份。当前掩码仍由 CVAT 原有标注系统管理，
-修改掩码或移动参考矩形都不会修改 YTVIS 导出的 GT bbox。
+每个实例帧导入为一个 `bbox_mask` 对象，其 `elements` 包含独立的 Rectangle 和可选的 Mask。
+有 bbox 但缺失 mask 的帧仅包含 Rectangle；只有 mask 的帧不凭空生成 bbox。
+掩码支持压缩或非压缩的 COCO RLE，不支持多边形列表。
+画布显示独立 bbox，不再用掩码紧致框代替它。展开右侧对象的 **PARTS**，可分别显示、隐藏和锁定组件。
+bbox 默认锁定；需要修改时解锁 Rectangle，再拖动或调整大小。它与 mask 互不移动、裁剪或缩放。
+锁定状态与 CVAT 其他锁定开关一样属于当前客户端状态，重新加载后 bbox 恢复默认锁定。
+视频信息、原始轨迹 ID 和 `source_*` 元数据通过 Task 来源关联保存，Shape 来源关联只保存实例身份。
+导出使用当前组件：保留锁定 bbox 时保持 GT，主动修改 bbox 后导出修改值。
 
 任务级导入会把该序列的标注分配到相应 Job。不要将完整序列 JSON 逐个重复导入每个 Job。
 替换导入会清理旧的 Task 来源基线，成功导入 YTVIS 后建立新基线；导入失败会回滚。
@@ -126,23 +128,24 @@ CVAT 界面中的对象编号也不等于
 原目标在预览期间会暂时隐藏，取消后恢复。SAM 仅修正当前帧，不会自动修改相邻帧或传播实例 ID。
 
 对于少量边缘像素，可按下一节的方法继续精修。补齐参考矩形对应的缺失掩码时，
-选中该参考矩形，再打开 Segment Anything，确认出现 **Fill mask for object #…**。
-按 **S** 开始并添加正负点；SAM 使用该框作为提示，点击 **Done** 后创建继承其来源身份和标签的 Mask，
-无需填写 ID。参考矩形可保留，也可删除；导出会使用新 Mask。
-再次选中该参考矩形时，若当前帧已有同一来源实例的 Mask，SAM 会转为精修该 Mask。
-补齐后可按下一节使用刷子继续修边；直接从空白处新画的 Mask 没有来源关联，不能用于 YTVIS 导出。
-同一目标同一帧只能有一个 Mask，重复 Mask 会阻止导出。
+选中只有 Rectangle 组件的实例，再打开 SAM，确认出现 **Fill mask for object #…**。
+按 **S** 开始并添加正负点；SAM 使用 bbox 作为提示，点击 **Done** 后把 Mask 加入同一实例，
+无需填写 ID，也不会创建第二个顶层对象。再次选择此实例会精修其已有 Mask。
+也可直接点击实例上的 **Draw mask**，用刷子补齐；只有 mask 的实例可用 **Draw bbox** 补画独立框。
+不要使用左侧 **Draw new mask** 替代补齐操作，它创建的独立对象没有 YTVIS 实例身份。
 
-当前支持精修和补齐原有轨迹，不分配全新轨迹 ID，未关联或关联到其他视频、未知实例的对象会阻止导出。
-删除 Mask 后导出该帧的 `segmentation` 和 `area` 为 `null`，原始 bbox 仍保留。
+当前支持精修和补齐原有轨迹，不分配全新轨迹 ID。未关联、身份未知或同帧同实例重复的对象会阻止导出。
+展开 **PARTS** 后，**Remove component** 只删除对应组件，需先解锁；最后一个组件不能单独删除。
+删除 Mask 后该帧的 `segmentations` 和 `areas` 为 `null`，bbox 保留；删除 Rectangle 后 `bboxes` 为 `null`。
+对象菜单中的 **Remove** 删除整个实例帧，两种几何都不再导出。上述编辑支持撤销和重做。
 
 ## 7. 精修掩码
 
 对于 SAM 修正后仍不准确的边缘、孔洞或少量误分像素，可直接编辑已有 Mask：
 
 1. 暂停播放，找到目标掩码，确认它未锁定、未隐藏。
-2. 打开右侧对象条目的菜单，选择 **Edit**；也可在已激活的掩码上按住 **Shift** 并双击。
-   从已有对象的 Edit 进入会修改该对象；左侧 **Draw new mask → Shape** 用于创建新对象。
+2. 点击实例上的 **Edit mask**；也可在已激活的掩码上按住 **Shift** 并双击。
+   这些入口只修改 Mask 组件，独立 bbox 保持原位。
 3. 放大需要精修的区域，在刷子工具栏选择工具：
 
    | 工具 | 用途 | 默认快捷键 |
@@ -176,11 +179,11 @@ CVAT 界面中的对象编号也不等于
 3. 已保留原图时关闭 **Save images**，只导出标注；需要完整交付数据集时再开启。
 4. 等待导出请求完成；如跳转到 **Requests** 页面，在对应请求完成后下载 ZIP。
 5. 将结果保存到独立目录，例如 `corrected/dancetrack0041__p1/`，保留原始标注。
-6. 解压检查 `annotations/instances.json`，确认视频 ID、轨迹 ID、图片路径和 GT bbox 保持不变。
+6. 解压检查 `annotations/instances.json`，确认视频 ID、轨迹 ID、图片路径保持不变，bbox 与当前标注一致。
    先用一个小任务验证导出结果可重新导入，再批量处理其他序列。
 
-导出会聚合所有 Job，按原视频顺序写出轨迹级 `segmentations` 和重新计算的 `areas`，保留
-原始 `bboxes`、视频信息和来源元数据。结果只包含当前 Task 对应的视频，合回完整数据集时应按
+导出会聚合所有 Job，按原视频顺序写出当前组件的 `bboxes`、`segmentations` 和重新计算的 `areas`，
+保留视频信息和来源元数据。结果只包含当前 Task 对应的视频，合回完整数据集时应按
 `video_id` 替换该视频及其标注，保留其他视频。启用 **Save images** 时，图片位于 ZIP 的
 `images/<原始 file_name>` 下。
 
@@ -192,35 +195,12 @@ YTVIS 导出用途不同；Task 关联的原始信息也会随备份恢复。
 | 现象 | 处理 |
 | --- | --- |
 | 导入提示需要完整视频 | 对照 ZIP 内路径与 `videos[].file_names`，确认目录前缀、帧数、尺寸一致，未跳帧或删除帧 |
-| 导入后部分目标只有框 | 源数据对应帧缺失 mask；选中参考矩形，通过 SAM 补齐并自动继承来源身份 |
-| 导出提示身份错误或重复 Mask | 从参考矩形使用 SAM 补齐，删除未关联的独立 Mask 或同一帧同一实例的多余 Mask |
-| 格式列表没有 YTVIS 1.0 | 更新后端及 worker 镜像，执行数据库迁移至 `0111_ann_sources`，刷新页面 |
+| 导入后部分目标只有框 | 源数据对应帧缺失 mask；选择实例，通过 SAM 或 **Draw mask** 补齐同一实例的 Mask |
+| 导出提示身份错误或重复实例 | 从实例使用 SAM 或 **Draw mask** 补齐，删除误建的独立对象或重复实例 |
+| 格式列表没有 YTVIS 1.0 | 更新后端及 worker 镜像，执行数据库迁移至 `0112_bbox_mask`，刷新页面 |
 | AI Tools 中没有 SAM | 按 [安装指南](../INSTALL.md#7-验证与使用) 检查 Nuclio 函数是否为 `ready` |
-| 没有 `Refine object #…` 或 `Fill mask for object #…` | 确认选中单个 Mask 或带来源身份的参考框，模型为 Segment Anything |
+| 没有 `Refine object #…` 或 `Fill mask for object #…` | 确认选中单个 YTVIS 实例，模型为 Segment Anything |
 | Interact 无法点击 | 解锁并显示目标；确认当前 Job 可编辑、模型已加载 |
 | 切换模型后结果异常 | 按 [SAM 配置说明](../serverless/pytorch/facebookresearch/sam/README.md) 检查 `cvat.json`，重启 SAM 后刷新网页 |
 
 其他序列重复第 3～8 节即可；标签继续沿用同一个 Project。
-
-## 10. 来源数据的存储边界
-
-Task 和 Shape 的来源信息统一使用 `ann_sources`，包含格式标识与载荷。例如，Shape 的来源记录为：
-
-```json
-{
-  "format": "YTVIS 1.0",
-  "data": {"video_id": 9, "instance_id": 55, "ref_bbox": [1, 2, 15, 16]}
-}
-```
-
-参考框的内部名称是 `ref_bbox`；YTVIS 文件仍按标准使用 `bboxes`，
-原数据的 `source_bboxes` 等来源字段也保持原名。
-
-通用模型、标注读写和备份保存及传递来源载荷；格式适配器负责解释具体格式。
-前端通过来源适配函数解析只读身份，用于显示和稳定配色，画布不判断 YTVIS 类型。
-字段校验、参考框导出和原始身份重建由后端格式适配器负责。Shape 更新省略 `ann_sources`
-时保留原关联，显式传入 `null` 时解除关联；删除 Shape 会删除其关联记录。
-普通标注删除保留 Task 来源基线，因此删除全部 Mask 后仍可导出原始轨迹与 GT bbox。
-
-迁移 `0111_ann_sources` 会转换旧数据库的专用记录，备份导入也兼容旧字段。
-前端应与后端一起更新，以便在对象序列化时保留通用来源载荷。

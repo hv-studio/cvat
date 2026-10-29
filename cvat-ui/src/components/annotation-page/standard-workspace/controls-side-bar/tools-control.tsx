@@ -271,7 +271,9 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
     private interaction: {
         id: string | null;
         isAborted: boolean;
-        refinementTarget: { clientID: number; frame: number; points: number[]; shapeType: ShapeType } | null;
+        refinementTarget: {
+            clientID: number; frame: number; points: number[]; shapeType: ShapeType; redrawID: number;
+        } | null;
         latestPostponedEvent: Event | null;
         latestResponse: {
             rle: Int32Array;
@@ -380,6 +382,8 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
             }
         } else if (!prevProps.isActivated && isActivated) {
             const target = this.pendingRefinementTarget;
+            const geometry = target?.shapeType === ShapeType.BBOX_MASK ?
+                target.elements.find((element) => element.shapeType === ShapeType.MASK) ?? target.elements[0] : target;
             this.pendingRefinementTarget = null;
             // reset flags when start interaction/tracking
             this.interaction = {
@@ -388,8 +392,9 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
                 refinementTarget: target ? {
                     clientID: target.clientID,
                     frame: target.frame,
-                    points: [...target.points],
-                    shapeType: target.shapeType,
+                    points: [...geometry.points],
+                    shapeType: geometry.shapeType,
+                    redrawID: geometry.clientID,
                 } : null,
                 latestPostponedEvent: null,
                 latestResponse: [],
@@ -456,11 +461,7 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
         const target = states.find((state) => state.clientID === ids[0] &&
             state.objectType === ObjectType.SHAPE);
         if (target?.shapeType === ShapeType.MASK) return target;
-        if (target?.shapeType === ShapeType.RECTANGLE && target.sourceIdentity) {
-            // Reuse a previously filled mask instead of creating a duplicate for the same source.
-            return states.find((state) => state.shapeType === ShapeType.MASK &&
-                state.sourceIdentity?.key === target.sourceIdentity.key) ?? target;
-        }
+        if (target?.shapeType === ShapeType.BBOX_MASK) return target;
         return null;
     }
 
@@ -470,7 +471,10 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
         const selectedTarget = this.getSelectedTarget();
         return !!activeInteractor && activeInteractor.version >= MIN_SUPPORTED_INTERACTOR_VERSION &&
             activeLabelID !== null && !!labels.length && !frameData.deleted && !isActivated && !fetching &&
-            !(selectedTarget && (selectedTarget.lock || selectedTarget.isGroundTruth || selectedTarget.hidden));
+            !(selectedTarget && (selectedTarget.lock || selectedTarget.isGroundTruth || selectedTarget.hidden ||
+                selectedTarget.elements.some((element) => (
+                    element.shapeType === ShapeType.MASK && (element.lock || element.hidden)
+                ))));
     }
 
     private startInteraction = (): void => {
@@ -915,7 +919,7 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
         canvasInstance.interact({
             enabled: true,
             command: 'put_shapes',
-            ...(this.interaction.refinementTarget ? { redraw: this.interaction.refinementTarget.clientID } : {}),
+            ...(this.interaction.refinementTarget ? { redraw: this.interaction.refinementTarget.redrawID } : {}),
             payload: {
                 shapes: shapesToBeDrawn,
             },
@@ -1200,22 +1204,24 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
             const [response] = this.interaction.latestResponse;
             if (target && target.frame === frame && refinementTarget.frame === frame &&
                 !target.lock && !target.isGroundTruth && response.rle.length >= 6) {
-                if (target.shapeType === ShapeType.MASK) {
-                    target.points = Array.from(response.rle);
-                    await updateAnnotations([target]);
-                } else {
-                    await createAnnotations([new core.classes.ObjectState({
+                const mask = target.shapeType === ShapeType.MASK ? target :
+                    target.elements.find((element) => element.shapeType === ShapeType.MASK);
+                if (mask) {
+                    if (mask.lock || mask.hidden) return;
+                    mask.points = Array.from(response.rle);
+                    await updateAnnotations([mask]);
+                } else if (target.shapeType === ShapeType.BBOX_MASK) {
+                    target.elements = [...target.elements, new core.classes.ObjectState({
                         objectType: ObjectType.SHAPE,
                         shapeType: ShapeType.MASK,
                         frame,
                         label: target.label,
-                        attributes: target.attributes,
-                        annSources: target.annSources,
                         points: Array.from(response.rle),
                         zOrder: target.zOrder,
                         occluded: target.occluded,
                         source: core.enums.Source.SEMI_AUTO,
-                    })]);
+                    })];
+                    await updateAnnotations([target]);
                 }
             }
             return;
@@ -1431,9 +1437,14 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
         const renderStartWithBox = activeInteractor?.params?.canvas?.startWithBoxOptional ?? false;
         const selectedTarget = this.getSelectedTarget();
         const cannotRefine = selectedTarget && (
-            selectedTarget.lock || selectedTarget.isGroundTruth || selectedTarget.hidden
+            selectedTarget.lock || selectedTarget.isGroundTruth || selectedTarget.hidden ||
+                selectedTarget.elements.some((element) => (
+                    element.shapeType === ShapeType.MASK && (element.lock || element.hidden)
+                ))
         );
-        const targetHint = selectedTarget?.shapeType === ShapeType.MASK ?
+        const hasMask = selectedTarget?.shapeType === ShapeType.MASK ||
+            selectedTarget?.elements.some((element) => element.shapeType === ShapeType.MASK);
+        const targetHint = hasMask ?
             'Add points to refine its mask. Done updates this object; Esc cancels.' :
             'Add points to create its mask. Done keeps the source identity; Esc cancels.';
 
@@ -1489,7 +1500,7 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
                 <div className='cvat-tools-interactor-setups'>
                     {selectedTarget && (
                         <Text className='cvat-tools-refinement-target'>
-                            {`${selectedTarget.shapeType === ShapeType.MASK ? 'Refine' : 'Fill mask for'} object #${selectedTarget.clientID}. `}
+                            {`${hasMask ? 'Refine' : 'Fill mask for'} object #${selectedTarget.clientID}. `}
                             {cannotRefine ? 'This object is not editable. Select an unlocked, visible annotation.' :
                                 targetHint}
                         </Text>

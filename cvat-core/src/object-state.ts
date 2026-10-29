@@ -118,6 +118,7 @@ export default class ObjectState {
 
         const updateFlags: UpdateFlags = {
             reset() {
+                delete this.elements;
                 delete this.label;
                 delete this.attributes;
                 delete this.descriptions;
@@ -448,6 +449,14 @@ export default class ObjectState {
                     },
                 },
                 elements: {
+                    set: (elements: ObjectState[]) => {
+                        if (data.shapeType !== ShapeType.BBOX_MASK || !Array.isArray(elements) ||
+                            elements.some((element) => !(element instanceof ObjectState))) {
+                            throw new ArgumentError('Only bbox_mask components can be replaced');
+                        }
+                        data.elements = [...elements];
+                        data.updateFlags.elements = true;
+                    },
                     get: () => {
                         if (data.elements) {
                             return [...data.elements];

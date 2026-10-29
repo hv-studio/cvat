@@ -1,15 +1,11 @@
-import json
-import tempfile
-import zipfile
 from copy import deepcopy
-from pathlib import Path
 from unittest.mock import patch
 
 from django.test import TestCase
 
 from cvat.apps.dataset_manager.task import JobAnnotation
 from cvat.apps.engine import models, serializers
-from cvat.apps.engine.backup import TaskImporter, _TaskBackupBase
+from cvat.apps.engine.backup import _TaskBackupBase
 
 
 class AnnSourcesTest(TestCase):
@@ -71,20 +67,3 @@ class AnnSourcesTest(TestCase):
         self.assertEqual(self.anns.data["shapes"][0]["ann_sources"], source)
         self.anns.delete()
         self.assertFalse(models.LabeledShapeSource.objects.exists())
-
-    def test_legacy_backup_upgrade(self) -> None:
-        bbox = [1, 2, 3, 4]
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "backup.zip"
-            with zipfile.ZipFile(path, "w") as archive:
-                archive.writestr(
-                    "task.json", json.dumps({"version": "1.0", "ytvis_source": {"videos": []}})
-                )
-                archive.writestr(
-                    "annotations.json", json.dumps([{"shapes": [{"source_bbox": bbox}]}])
-                )
-            importer = TaskImporter(str(path), user_id=None)
-        self.assertEqual(importer._ann_sources, {"format": "YTVIS 1.0", "data": {"videos": []}})
-        shape = importer._annotations[0]["shapes"][0]
-        self.assertEqual(shape["ann_sources"]["data"]["ref_bbox"], bbox)
-        self.assertNotIn("source_bbox", shape)

@@ -408,7 +408,7 @@ export default function ItemMenu(props: Props): MenuProps {
         label: <CreateURLItem toolProps={props} />,
     }];
 
-    if (objectType !== ObjectType.TAG) {
+    if (objectType !== ObjectType.TAG && shapeType !== ShapeType.BBOX_MASK) {
         items.push({
             key: MenuKeys.COPY,
             label: <MakeCopyItem toolProps={props} />,
@@ -442,10 +442,12 @@ export default function ItemMenu(props: Props): MenuProps {
         });
     }
 
-    items.push({
-        key: MenuKeys.PROPAGATE,
-        label: <PropagateItem toolProps={props} />,
-    });
+    if (shapeType !== ShapeType.BBOX_MASK) {
+        items.push({
+            key: MenuKeys.PROPAGATE,
+            label: <PropagateItem toolProps={props} />,
+        });
+    }
 
     if (is2D && !locked && [ShapeType.POLYGON, ShapeType.POLYLINE, ShapeType.CUBOID].includes(shapeType)) {
         items.push({

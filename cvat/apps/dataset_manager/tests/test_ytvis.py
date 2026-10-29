@@ -15,7 +15,7 @@ from cvat.apps.dataset_manager.bindings import CvatExportError, CvatImportError,
 from cvat.apps.dataset_manager.formats.registry import make_exporter, make_importer
 from cvat.apps.dataset_manager.formats.transformations import MaskConverter
 from cvat.apps.dataset_manager.task import JobAnnotation, TaskAnnotation
-from cvat.apps.engine import models
+from cvat.apps.engine import models, serializers
 from cvat.apps.engine.backup import TaskExporter, TaskImporter
 
 
@@ -127,7 +127,7 @@ class YtvisTest(TestCase):
                 self.assertEqual(models.LabeledShapeSource.objects.count(), 3)
                 self.assertFalse(self.label.attributespec_set.exists())
                 self.assertFalse(models.LabeledShapeAttributeVal.objects.exists())
-                self.assertEqual(models.LabeledShape.objects.filter(type="rectangle").count(), 1)
+                self.assertEqual(models.LabeledShape.objects.filter(type="rectangle").count(), 3)
                 output = self._export()
                 self.assertEqual(output, {**self.source, "videos": [self.source["videos"][1]]})
                 metadata = models.TaskAnnSource.objects.get(task=self.task).data["data"]
@@ -135,21 +135,23 @@ class YtvisTest(TestCase):
 
     def test_fill_missing_mask_keeps_source_boxes(self) -> None:
         self._import()
-        rectangle = models.LabeledShape.objects.get(type="rectangle")
-        anns = JobAnnotation(rectangle.job_id)
+        parent = models.LabeledShape.objects.get(type="bbox_mask", frame=1)
+        anns = JobAnnotation(parent.job_id)
         anns.init_from_db()
-        reference = next(shape for shape in anns.data["shapes"] if shape["type"] == "rectangle")
-        new_mask = deepcopy(reference)
+        shape = next(shape for shape in anns.data["shapes"] if shape["id"] == parent.id)
+        new_mask = deepcopy(shape["elements"][0])
         new_mask.pop("id")
         new_mask["type"] = "mask"
         new_mask["points"] = MaskConverter.dm_mask_to_cvat_rle(dm.Mask(self.mask))
-        anns.create({"shapes": [new_mask], "tracks": [], "tags": [], "intervals": []})
+        shape["elements"].append(new_mask)
+        anns.update(deepcopy(anns.data))
         output = self._export()
         for actual, original in zip(output["annotations"], self.source["annotations"]):
             self.assertEqual(actual["id"], original["id"])
             self.assertEqual(actual["bboxes"], original["bboxes"])
         track = output["annotations"][0]
         self.assertEqual(track["areas"], [20, 20, None])
+        self.assertEqual(models.LabeledShape.objects.filter(parent=None).count(), 3)
         np.testing.assert_array_equal(mask_utils.decode(track["segmentations"][1]), self.mask)
 
     def test_invalid_import_rolls_back(self) -> None:
@@ -161,12 +163,13 @@ class YtvisTest(TestCase):
             self._import(invalid)
         self.assertEqual(self._export(), original)
 
-    def test_edit_and_delete_mask_preserves_gt(self) -> None:
+    def test_edit_remove_components_and_delete_instance(self) -> None:
         self._import()
-        original = models.LabeledShape.objects.filter(type="mask", frame=0).get()
+        original = models.LabeledShape.objects.get(type="bbox_mask", frame=0)
         anns = JobAnnotation(original.job_id)
         anns.init_from_db()
-        mask = next(shape for shape in anns.data["shapes"] if shape["id"] == original.id)
+        parent = next(shape for shape in anns.data["shapes"] if shape["id"] == original.id)
+        mask = next(element for element in parent["elements"] if element["type"] == "mask")
         edited = np.zeros_like(self.mask)
         edited[12:16, 10:13] = 1
         mask["points"] = MaskConverter.dm_mask_to_cvat_rle(dm.Mask(edited))
@@ -175,10 +178,53 @@ class YtvisTest(TestCase):
         np.testing.assert_array_equal(mask_utils.decode(track["segmentations"][0]), edited)
         self.assertEqual(track["areas"][0], 12)
         self.assertEqual(track["bboxes"], self.source["annotations"][0]["bboxes"])
+        # Editing the box does not crop, translate or recompute the mask.
+        parent = next(shape for shape in anns.data["shapes"] if shape["id"] == original.id)
+        box = next(element for element in parent["elements"] if element["type"] == "rectangle")
+        box["points"] = [0, 1, 10, 12]
+        anns.update(deepcopy(anns.data))
+        track = self._export()["annotations"][0]
+        self.assertEqual(track["bboxes"][0], [0, 1, 10, 11])
+        np.testing.assert_array_equal(mask_utils.decode(track["segmentations"][0]), edited)
+        parent = next(shape for shape in anns.data["shapes"] if shape["id"] == original.id)
+        parent["elements"] = [box]
+        anns.update(deepcopy(anns.data))
+        track = self._export()["annotations"][0]
+        self.assertIsNone(track["segmentations"][0])
+        self.assertEqual(track["bboxes"][0], [0, 1, 10, 11])
         anns.delete({"shapes": [{"id": original.id}], "tracks": [], "tags": [], "intervals": []})
         track = self._export()["annotations"][0]
-        self.assertEqual(track["segmentations"], [None] * 3)
-        self.assertEqual(track["bboxes"], self.source["annotations"][0]["bboxes"])
+        self.assertIsNone(track["bboxes"][0])
+        self.assertIsNone(track["segmentations"][0])
+
+    def test_mask_without_bbox_and_component_validation(self) -> None:
+        source = deepcopy(self.source)
+        source["annotations"][0]["bboxes"][0] = None
+        self._import(source)
+        self.assertEqual(self._export()["annotations"], source["annotations"])
+        parent = models.LabeledShape.objects.get(type="bbox_mask", frame=0)
+        anns = JobAnnotation(parent.job_id)
+        anns.init_from_db()
+        shape = next(shape for shape in anns.data["shapes"] if shape["id"] == parent.id)
+        self.assertEqual([element["type"] for element in shape["elements"]], ["mask"])
+        self.assertEqual(set(shape["ann_sources"]["data"]), {"video_id", "instance_id"})
+        for elements in ([], shape["elements"] * 2, [{**shape["elements"][0], "frame": 1}]):
+            serializer = serializers.LabeledShapeSerializer(data={**shape, "elements": elements})
+            self.assertFalse(serializer.is_valid())
+        from cvat.apps.engine.backup import _TaskBackupBase
+
+        backup = _TaskBackupBase()._prepare_annotations(
+            deepcopy(anns.data), {self.label.id: {"value": "person", "attributes": {}}}
+        )
+        backup = {key: list(value) for key, value in backup.items() if key != "version"}
+        restored = _TaskBackupBase()._prepare_annotations(
+            backup, {"person": {"value": self.label.id, "attributes": {}}}
+        )
+        restored = {key: list(value) for key, value in restored.items()}
+        serializer = serializers.LabeledDataSerializer(data=restored)
+        serializer.is_valid(raise_exception=True)
+        anns.put(serializer.validated_data)
+        self.assertEqual(self._export()["annotations"], source["annotations"])
 
     def test_frame_paths_and_image_export(self) -> None:
         # Task frame order can differ from YTVIS; matching must use the complete paths.
@@ -220,15 +266,17 @@ class YtvisTest(TestCase):
 
     def test_export_rejects_duplicate_masks(self) -> None:
         self._import()
-        original = models.LabeledShape.objects.filter(type="mask").first()
+        original = models.LabeledShape.objects.filter(type="bbox_mask").first()
         anns = JobAnnotation(original.job_id)
         anns.init_from_db()
         duplicate = deepcopy(
-            next(shape for shape in anns.data["shapes"] if shape["type"] == "mask")
+            next(shape for shape in anns.data["shapes"] if shape["type"] == "bbox_mask")
         )
         duplicate.pop("id")
+        for element in duplicate["elements"]:
+            element.pop("id")
         anns.create({"shapes": [duplicate], "tracks": [], "tags": [], "intervals": []})
-        with self.assertRaisesRegex(CvatExportError, "duplicate mask"):
+        with self.assertRaisesRegex(CvatExportError, "duplicate instance"):
             self._export()
 
     def test_source_identity_and_replacement_import(self) -> None:

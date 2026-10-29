@@ -6,7 +6,7 @@
 import _ from 'lodash';
 import {
     shapeFactory, trackFactory, Track, Shape, Tag,
-    MaskShape, BasicInjection, SkeletonShape,
+    MaskShape, BBoxMaskShape, BasicInjection, SkeletonShape,
     SkeletonTrack, PolygonShape, CuboidShape,
     RectangleShape, PolylineShape, PointsShape, EllipseShape,
     InterpolationNotPossibleError, AudioInterval,
@@ -193,8 +193,10 @@ export default class Collection {
             dimension: data.dimension,
             jobType: data.jobType,
             nextClientID: () => ++config.globalObjectsCounter,
-            getMasksOnFrame: (frame: number) => (this.shapes[frame] as MaskShape[])
-                .filter((object) => object instanceof MaskShape),
+            getMasksOnFrame: (frame: number) => (this.shapes[frame] || [])
+                .filter((object) => !object.removed)
+                .flatMap((object) => (object instanceof BBoxMaskShape ? object.elements : [object]))
+                .filter((object): object is MaskShape => object instanceof MaskShape),
             replicasCount: data.replicasCount,
         };
     }
@@ -1152,6 +1154,7 @@ export default class Collection {
             cuboid: { shape: 0, track: 0 },
             skeleton: { shape: 0, track: 0 },
             mask: { shape: 0 },
+            bbox_mask: { shape: 0 },
             tag: 0,
             interval: {
                 count: 0,
@@ -1387,18 +1390,19 @@ export default class Collection {
                         type: state.shapeType,
                         z_order: state.zOrder,
                         source: state.source,
-                        elements: state.shapeType === 'skeleton' ? state.elements.map((element) => ({
-                            attributes: validateAttributesList(objectAttributesAsList(element)),
-                            frame: element.frame,
-                            group: 0,
-                            label_id: element.label.id,
-                            points: [...element.points],
-                            rotation: 0,
-                            type: element.shapeType,
-                            z_order: 0,
-                            outside: element.outside || false,
-                            occluded: element.occluded || false,
-                        })) : undefined,
+                        elements: [ShapeType.SKELETON, ShapeType.BBOX_MASK].includes(state.shapeType) ?
+                            state.elements.map((element) => ({
+                                attributes: validateAttributesList(objectAttributesAsList(element)),
+                                frame: element.frame,
+                                group: 0,
+                                label_id: element.label.id,
+                                points: [...element.points],
+                                rotation: 0,
+                                type: element.shapeType,
+                                z_order: 0,
+                                outside: element.outside || false,
+                                occluded: element.occluded || false,
+                            })) : undefined,
                     });
                 } else if (state.objectType === 'track') {
                     constructed.tracks.push({
@@ -1631,7 +1635,9 @@ export default class Collection {
 
         let minimumDistance = null;
         let minimumState = null;
-        for (const state of objectStates) {
+        for (const state of objectStates.flatMap((object) => (
+            object.shapeType === ShapeType.BBOX_MASK ? object.elements : [object]
+        ))) {
             checkObjectType('object state', state, null, { cls: ObjectState, name: 'ObjectState' });
             if (state.outside || state.hidden || state.objectType === ObjectType.TAG) {
                 continue;
@@ -1781,7 +1787,12 @@ export default class Collection {
         const ownsTransaction = this.history.beginTransaction(action);
         try {
             states.forEach((state) => {
-                const object = state.clientID === null ? null : this.objects[state.clientID];
+                const parent = state instanceof ObjectState && state.parentID !== null ?
+                    this.objects[state.parentID] : null;
+                let object = state.clientID === null ? null : this.objects[state.clientID];
+                if (parent instanceof BBoxMaskShape) {
+                    object = parent.elements.find((element) => element.clientID === state.clientID);
+                }
                 if (!object) {
                     throw new ArgumentError(`Annotation with client ID ${state.clientID} was not found`);
                 }

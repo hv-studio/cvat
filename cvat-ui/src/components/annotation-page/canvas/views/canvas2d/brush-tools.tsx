@@ -82,9 +82,11 @@ const MIN_BRUSH_SIZE = 1;
 function BrushTools(): React.ReactPortal | null {
     const dispatch = useDispatch();
     const {
-        defaultLabelID, visible, canvasInstance, labels, activeObjectHidden, keyMap, normalizedKeyMap,
+        defaultLabelID, componentDrawing, visible, canvasInstance, labels, activeObjectHidden, keyMap, normalizedKeyMap,
     } = useSelector((state: CombinedState) => ({
-        defaultLabelID: state.annotation.drawing.activeLabelID,
+        defaultLabelID: state.annotation.editing.objectState?.shapeType === ShapeType.BBOX_MASK ?
+            state.annotation.editing.objectState.label.id : state.annotation.drawing.activeLabelID,
+        componentDrawing: state.annotation.editing.objectState?.shapeType === ShapeType.BBOX_MASK,
         visible: state.annotation.canvas.brushTools.visible,
         canvasInstance: state.annotation.canvas.instance,
         labels: state.annotation.job.labels,
@@ -307,7 +309,7 @@ function BrushTools(): React.ReactPortal | null {
                     }}
                 />
             </CVATTooltip>
-            {!editableState && (
+            {!editableState && !componentDrawing && (
                 <CVATTooltip title={`Continue ${normalizedKeyMap.SWITCH_REDRAW_MODE_STANDARD_CONTROLS}`}>
                     <Button
                         type='text'

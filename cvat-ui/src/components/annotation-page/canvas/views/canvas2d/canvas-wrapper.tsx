@@ -90,6 +90,7 @@ interface StateToProps {
     jobInstance: any;
     activatedStateID: number | null;
     activatedElementID: number | null;
+    editedState: ObjectState | null;
     activatedAttributeID: number | null;
     selectedStatesID: number[];
     annotations: ObjectState[];
@@ -181,6 +182,7 @@ function mapStateToProps(state: CombinedState): StateToProps {
                 activeControl, instance: canvasInstance, ready: canvasIsReady, activeObjectHidden,
             },
             drawing: { activeLabelID, activeObjectType },
+            editing: { objectState: editedState },
             job: { instance: jobInstance },
             player: {
                 frame: { data: frameData, number: frame },
@@ -240,6 +242,7 @@ function mapStateToProps(state: CombinedState): StateToProps {
         frameData,
         frameAngle: frameAngles[frame - jobInstance.startFrame],
         canvasIsReady,
+        editedState,
         frame,
         activatedStateID,
         activatedElementID,
@@ -762,7 +765,9 @@ class CanvasWrapperComponent extends React.PureComponent<Props> {
 
         state.objectType = state.shapeType === ShapeType.MASK ?
             ObjectType.SHAPE : state.objectType ?? activeObjectType;
-        state.label = state.label || jobInstance.labels.filter((label: any) => label.id === activeLabelID)[0];
+        state.label = this.props.editedState?.shapeType === ShapeType.BBOX_MASK ?
+            this.props.editedState.label :
+            state.label || jobInstance.labels.filter((label: any) => label.id === activeLabelID)[0];
         state.frame = frame;
         state.rotation = state.rotation || 0;
         state.zOrder = currentZLayer;
@@ -791,7 +796,18 @@ class CanvasWrapperComponent extends React.PureComponent<Props> {
         const source = simplifyPoly && [ShapeType.POLYGON, ShapeType.POLYLINE].includes(state.shapeType) ?
             AnnotationSource.DRAW_SIMPLIFIED_POLY : AnnotationSource.OTHER;
 
-        onCreateAnnotations([objectState], source);
+        const parent = this.props.editedState;
+        if (parent?.shapeType === ShapeType.BBOX_MASK) {
+            const current = this.props.annotations.find((ann) => ann.clientID === parent.clientID);
+            if (current && parent.frame === frame && !current.lock &&
+                !current.elements.some((element) => element.shapeType === objectState.shapeType)) {
+                objectState.label = current.label;
+                current.elements = [...current.elements, objectState];
+                this.props.onUpdateAnnotations([current]);
+            }
+        } else {
+            onCreateAnnotations([objectState], source);
+        }
         onUpdateEditedObject(null);
     };
 
@@ -827,7 +843,7 @@ class CanvasWrapperComponent extends React.PureComponent<Props> {
         const { onSelectObjects, updateActiveControl } = this.props;
         const { states, continueSelection } = event.detail;
         updateActiveControl(continueSelection ? ActiveControl.SELECT : ActiveControl.CURSOR);
-        onSelectObjects(states.map((state: ObjectState): number => state.clientID));
+        onSelectObjects([...new Set<number>(states.map((state: ObjectState): number => this.rootID(state)))]);
     };
 
     private onCanvasObjectsJoined = (event: any): void => {
@@ -952,10 +968,18 @@ class CanvasWrapperComponent extends React.PureComponent<Props> {
         jobInstance.logger.log(EventScope.zoomImage);
     };
 
+    private rootID(state: ObjectState): number {
+        return this.props.annotations.some((parent) => (
+            parent.clientID === state.parentID && parent.shapeType === ShapeType.BBOX_MASK
+        )) ? state.parentID : state.clientID;
+    }
+
     private onCanvasShapeClicked = (e: any): void => {
         const { onActivateObject, onExpandObject } = this.props;
-        onActivateObject(e.detail.state.clientID, null);
-        scrollAndExpandState(e.detail.state, onExpandObject);
+        const rootID = this.rootID(e.detail.state);
+        onActivateObject(rootID, rootID === e.detail.state.clientID ? null : e.detail.state.clientID);
+        const parent = this.props.annotations.find((state) => state.clientID === rootID);
+        scrollAndExpandState(parent ?? e.detail.state, onExpandObject);
     };
 
     private onCanvasShapeDeactivated = (e: any): void => {
@@ -988,7 +1012,7 @@ class CanvasWrapperComponent extends React.PureComponent<Props> {
         }
 
         const { selectedStatesID, onSelectObjects } = this.props;
-        const clientID = result.state.clientID as number;
+        const clientID = this.rootID(result.state);
         onSelectObjects(selectedStatesID.includes(clientID) ?
             selectedStatesID.filter((selectedID: number): boolean => selectedID !== clientID) :
             [...selectedStatesID, clientID]);
@@ -1015,9 +1039,11 @@ class CanvasWrapperComponent extends React.PureComponent<Props> {
         }
 
         if (result?.state) {
-            const newActivatedElement = event.detail.activatedElementID || null;
-            if (activatedStateID !== result.state.clientID || activatedElementID !== newActivatedElement) {
-                onActivateObject(result.state.clientID, event.detail.activatedElementID || null);
+            const rootID = this.rootID(result.state);
+            const newActivatedElement = rootID !== result.state.clientID ?
+                result.state.clientID : event.detail.activatedElementID || null;
+            if (activatedStateID !== rootID || activatedElementID !== newActivatedElement) {
+                onActivateObject(rootID, newActivatedElement);
             }
         }
     };
@@ -1137,7 +1163,8 @@ class CanvasWrapperComponent extends React.PureComponent<Props> {
                 }
             }
             if (activatedState && activatedState.objectType !== ObjectType.TAG) {
-                canvasInstance.activate(activatedStateID, activatedAttributeID);
+                canvasInstance.activate(activatedState.shapeType === ShapeType.BBOX_MASK ?
+                    this.props.activatedElementID ?? activatedStateID : activatedStateID, activatedAttributeID);
             }
         } else if (workspace === Workspace.ATTRIBUTES) {
             canvasInstance.fit();
@@ -1242,7 +1269,9 @@ class CanvasWrapperComponent extends React.PureComponent<Props> {
             'canvas.setup',
             () => {
                 const { activatedStateID, activatedAttributeID } = this.props;
-                canvasInstance.activate(activatedStateID, activatedAttributeID);
+                const activatedState = this.props.annotations.find((state) => state.clientID === activatedStateID);
+                canvasInstance.activate(activatedState?.shapeType === ShapeType.BBOX_MASK ?
+                    this.props.activatedElementID ?? activatedStateID : activatedStateID, activatedAttributeID);
             },
             { once: true },
         );

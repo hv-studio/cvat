@@ -40,6 +40,7 @@ interface Vector2D {
 
 export interface DrawnState {
     clientID: number;
+    parentID?: number;
     outside?: boolean;
     occluded?: boolean;
     hidden?: boolean;

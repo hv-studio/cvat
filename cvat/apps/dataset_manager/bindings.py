@@ -741,7 +741,10 @@ class CommonData(InstanceLabelData):
 
         self._ensure_points_converted_to_floats(_shape)
         _shape["elements"] = [
-            self._import_shape(element, label_id) for element in _shape.get("elements", [])
+            self._import_shape(
+                element, label_id if shape.type == ShapeType.SKELETON else None
+            )
+            for element in _shape.get("elements", [])
         ]
 
         return _shape
@@ -2370,7 +2373,10 @@ class CvatToDmAnnotationConverter:
                 elements, label=dm_label, attributes=dm_attr, group=dm_group, z_order=shape.z_order
             )
         else:
-            raise Exception("Unknown shape type '%s'" % shape.type)
+            raise CvatExportError(
+                f"Shape type {shape.type!r} is not supported by this format; "
+                "use YTVIS for bbox_mask instances"
+            )
 
         results = []
 

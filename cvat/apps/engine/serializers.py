@@ -4207,7 +4207,7 @@ class ShapeSerializer(serializers.Serializer):
             bad_num_points_unless(num_points == 16)
         elif shape_type == models.ShapeType.MASK:
             bad_num_points_unless(num_points >= 5)
-        elif shape_type == models.ShapeType.SKELETON:
+        elif shape_type in {models.ShapeType.SKELETON, models.ShapeType.BBOX_MASK}:
             bad_num_points_unless(num_points == 0)
         else:
             assert False, f"Unknown shape type '{shape_type}'"
@@ -4240,7 +4240,30 @@ class LabeledShapeSerializer(SubLabeledShapeSerializer):
 
         num_elements = len(attrs.get("elements", ()))
 
-        if attrs["type"] == models.ShapeType.SKELETON:
+        if attrs["type"] == models.ShapeType.BBOX_MASK:
+            elements = attrs.get("elements", [])
+            types = [element["type"] for element in elements]
+            if not types or len(types) != len(set(types)) or not set(types) <= {
+                models.ShapeType.RECTANGLE,
+                models.ShapeType.MASK,
+            }:
+                raise serializers.ValidationError(
+                    {"elements": "expected one rectangle and/or one mask"}
+                )
+            if attrs.get("rotation", 0) or any(
+                element["frame"] != attrs["frame"]
+                or element["label_id"] != attrs["label_id"]
+                or element.get("rotation", 0)
+                or element.get("ann_sources")
+                for element in elements
+            ):
+                raise serializers.ValidationError(
+                    {
+                        "elements": "components must share frame and label, "
+                        "without rotation or source identity"
+                    }
+                )
+        elif attrs["type"] == models.ShapeType.SKELETON:
             if num_elements == 0:
                 raise serializers.ValidationError(
                     {"elements": "at least one required for skeleton shape"}
@@ -4248,7 +4271,7 @@ class LabeledShapeSerializer(SubLabeledShapeSerializer):
         else:
             if num_elements != 0:
                 raise serializers.ValidationError(
-                    {"elements": "not allowed for non-skeleton shape"}
+                    {"elements": "not allowed for this shape type"}
                 )
 
         return attrs
@@ -4367,6 +4390,12 @@ class LabeledIntervalSerializerFromDB(serializers.BaseSerializer):
 class TrackedShapeSerializer(ShapeSerializer, AttributedAnnotationSerializer):
     id = serializers.IntegerField(default=None, allow_null=True)
     frame = serializers.IntegerField(min_value=0)
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        if attrs["type"] == models.ShapeType.BBOX_MASK:
+            raise serializers.ValidationError({"type": "bbox_mask supports per-frame shapes only"})
+        return attrs
 
 
 class SubLabeledTrackSerializer(

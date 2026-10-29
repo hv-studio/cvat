@@ -34,7 +34,6 @@ from rest_framework.parsers import JSONParser
 from rest_framework.renderers import JSONRenderer
 
 import cvat.apps.dataset_manager as dm
-from cvat.apps.dataset_manager.backup_compat import upgrade_ann_sources
 from cvat.apps.dataset_manager.util import (
     ExportCacheManager,
     TmpDirManager,
@@ -314,7 +313,12 @@ class _TaskBackupBase(_BackupBase):
                 for attr in shape["attributes"]:
                     _update_attribute(attr, label)
 
-                deque(_prepare_shapes(shape.get("elements", []), label), maxlen=0)
+                deque(
+                    _prepare_shapes(
+                        shape.get("elements", []), label if shape["type"] == "skeleton" else ""
+                    ),
+                    maxlen=0,
+                )
 
                 self._prepare_meta(allowed_fields, shape)
 
@@ -926,7 +930,6 @@ class TaskImporter(_ImporterBase, _TaskBackupBase):
         self._user_id = user_id
         self._org_id = org_id
         self._manifest, self._annotations, self._annotation_guide, self._assets = self._read_meta()
-        upgrade_ann_sources(self._manifest, self._annotations)
         self._ann_sources = self._manifest.pop("ann_sources", None)
         self._version = self._read_version(self._manifest)
         self._labels_mapping = label_mapping

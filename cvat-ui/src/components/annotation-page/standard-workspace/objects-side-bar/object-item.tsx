@@ -16,6 +16,8 @@ import type { OrientationAngle } from 'utils/change-object-orientation';
 import ObjectItemElementComponent from './object-item-element';
 import ItemBasics from './object-item-basics';
 
+import BBoxMaskControls from './bbox-mask-controls';
+
 const INTERACTIVE_ELEMENT_SELECTOR = 'a, button, input, textarea, [role="button"], .ant-select, .anticon';
 
 interface Props {
@@ -234,6 +236,7 @@ function ObjectItemComponent(props: Props): JSX.Element {
                     runAnnotationAction={runAnnotationAction}
                 />
                 <ObjectButtonsContainer clientID={clientID} />
+                <BBoxMaskControls clientID={clientID} />
                 <ItemDetailsContainer
                     readonly={locked}
                     clientID={clientID}

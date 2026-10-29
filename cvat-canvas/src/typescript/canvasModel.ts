@@ -613,6 +613,8 @@ export class CanvasModelImpl extends MasterImpl implements CanvasModel {
     public setup(frameData: any, objectStates: any[], renderData: RenderData = {
         visibleSkeletonElements: {},
     }): void {
+        // Components use the existing geometry renderers and editors; identity stays with the parent.
+        const components = objectStates.flatMap((state) => (state.shapeType === 'bbox_mask' ? state.elements : [state]));
         if (this.data.imageID !== frameData.number) {
             if ([Mode.EDIT, Mode.DRAG, Mode.RESIZE].includes(this.data.mode)) {
                 throw Error(`Canvas is busy. Action: ${this.data.mode}`);
@@ -622,7 +624,7 @@ export class CanvasModelImpl extends MasterImpl implements CanvasModel {
             frameData.deleted === this.data.imageIsDeleted &&
             !this.data.configuration.forceFrameUpdate
         ) {
-            this.data.objects = objectStates;
+            this.data.objects = components;
             this.data.renderData = renderData;
             if (this.data.image) {
                 // display objects only if there is a drawn image
@@ -685,7 +687,7 @@ export class CanvasModelImpl extends MasterImpl implements CanvasModel {
                     prevRenderData === this.data.renderData
                 ) {
                     // check the request is relevant, other setup() may have been called while promise resolving
-                    this.data.objects = objectStates;
+                    this.data.objects = components;
                     this.data.renderData = renderData;
                 }
 
@@ -710,23 +712,28 @@ export class CanvasModelImpl extends MasterImpl implements CanvasModel {
     }
 
     public activate(clientID: number | null, attributeID: number | null): void {
-        if (this.data.activeElement.clientID === clientID && this.data.activeElement.attributeID === attributeID) {
+        let activeID = clientID;
+        if (activeID !== null && !this.objects.some((state: any) => state.clientID === clientID)) {
+            const components = this.objects.filter((state: any) => state.parentID === clientID);
+            activeID = (components.find((state: any) => state.shapeType === 'mask') || components[0])?.clientID ?? clientID;
+        }
+        if (this.data.activeElement.clientID === activeID && this.data.activeElement.attributeID === attributeID) {
             return;
         }
 
-        if (this.data.mode !== Mode.IDLE && clientID !== null) {
+        if (this.data.mode !== Mode.IDLE && activeID !== null) {
             throw Error(`Canvas is busy. Action: ${this.data.mode}`);
         }
 
-        if (typeof clientID === 'number') {
-            const [state] = this.objects.filter((_state: any): boolean => _state.clientID === clientID);
+        if (typeof activeID === 'number') {
+            const [state] = this.objects.filter((_state: any): boolean => _state.clientID === activeID);
             if (!state || state.objectType === 'tag') {
                 return;
             }
         }
 
         this.data.activeElement = {
-            clientID,
+            clientID: activeID,
             attributeID,
         };
 
@@ -754,7 +761,9 @@ export class CanvasModelImpl extends MasterImpl implements CanvasModel {
     }
 
     public focus(clientID: number): void {
-        this.data.focusData = { clientID };
+        const component = this.objects.find((state: any) => state.parentID === clientID && state.shapeType === 'rectangle') ||
+            this.objects.find((state: any) => state.parentID === clientID);
+        this.data.focusData = { clientID: component?.clientID ?? clientID };
         this.notify(UpdateReasons.SHAPE_FOCUSED);
     }
 
@@ -958,7 +967,9 @@ export class CanvasModelImpl extends MasterImpl implements CanvasModel {
     }
 
     public setSelectedObjects(clientIDs: number[]): void {
-        this.data.selectedObjects = [...clientIDs];
+        this.data.selectedObjects = this.objects.filter((state: any) => (
+            clientIDs.includes(state.clientID) || clientIDs.includes(state.parentID)
+        )).map((state: any) => state.clientID);
         this.notify(UpdateReasons.SELECTED_OBJECTS_UPDATED);
     }
 

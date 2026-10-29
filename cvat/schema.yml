@@ -13325,6 +13325,7 @@ components:
       - cuboid
       - mask
       - skeleton
+      - bbox_mask
       type: string
       description: |-
         * `rectangle` - RECTANGLE
@@ -13335,6 +13336,7 @@ components:
         * `cuboid` - CUBOID
         * `mask` - MASK
         * `skeleton` - SKELETON
+        * `bbox_mask` - BBOX_MASK
     SortingMethod:
       enum:
       - lexicographical

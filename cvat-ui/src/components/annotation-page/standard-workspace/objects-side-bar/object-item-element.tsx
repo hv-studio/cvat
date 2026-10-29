@@ -12,6 +12,7 @@ import { activateObject } from 'actions/annotation-actions';
 import { getObjectStateByClientID } from 'utils/objects-sidebar';
 import ObjectButtonsContainer from 'containers/annotation-page/standard-workspace/objects-side-bar/object-buttons';
 import ItemDetailsContainer from 'containers/annotation-page/standard-workspace/objects-side-bar/object-item-details';
+import BBoxMaskControls from './bbox-mask-controls';
 import { getObjectStateColor } from './shared';
 
 interface OwnProps {
@@ -63,6 +64,7 @@ function ObjectItemElementComponent(props: OwnProps): JSX.Element {
                 {`${element.label.name} [${element.shapeType.toUpperCase()}]`}
             </Text>
             <ObjectButtonsContainer clientID={element.clientID} />
+            <BBoxMaskControls clientID={parentID} elementID={clientID} />
             {!!element.label.attributes.length && (
                 <ItemDetailsContainer
                     readonly={element.lock}
