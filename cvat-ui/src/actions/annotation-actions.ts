@@ -877,6 +877,7 @@ export const ShapeTypeToControl: Record<ShapeType, ActiveControl> = {
     [ShapeType.ELLIPSE]: ActiveControl.DRAW_ELLIPSE,
     [ShapeType.SKELETON]: ActiveControl.DRAW_SKELETON,
     [ShapeType.MASK]: ActiveControl.DRAW_MASK,
+    [ShapeType.BBOX_MASK]: ActiveControl.CURSOR,
 };
 
 function startPastePlacementAsync(copiedStates: SerializedData[], selectCreated: boolean): ThunkAction {
@@ -1684,7 +1685,9 @@ export function updateAnnotationsAsync(statesToUpdate: ObjectState[], batch = fa
             }
 
             const needToUpdateAll = states
-                .some((state) => state.shapeType === ShapeType.MASK || state.parentID !== null);
+                .some((state) => (
+                    [ShapeType.MASK, ShapeType.BBOX_MASK].includes(state.shapeType) || state.parentID !== null
+                ));
             if (needToUpdateAll) {
                 dispatch(fetchAnnotationsAsync());
                 return;
@@ -2348,7 +2351,7 @@ export function updateEditedStateAsync(objectState: ObjectState | null): ThunkAc
         const state = getState();
         const { activeObjectHidden } = state.annotation.canvas;
         if (activeObjectHidden !== newActiveObjectHidden) {
-            dispatch(changeHideActiveObjectAsync(newActiveObjectHidden));
+            dispatch(changeHideActiveObjectAsync(newActiveObjectHidden, false));
         }
     };
 }

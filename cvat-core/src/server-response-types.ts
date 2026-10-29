@@ -282,6 +282,7 @@ export interface SerializedShape {
     score?: number;
     attributes: SerializedAttributes;
     elements: Omit<SerializedShape, 'elements'>[];
+    ann_sources?: { format: string; data: Record<string, unknown> } | null;
     occluded: boolean;
     outside: boolean;
     points?: number[];

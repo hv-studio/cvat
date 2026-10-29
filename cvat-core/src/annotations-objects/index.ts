@@ -5,6 +5,7 @@
 
 import { DataError } from '../exceptions';
 import { colors, ShapeType } from '../enums';
+import { getAnnColor } from '../ann-sources';
 import type { SerializedShape, SerializedTrack } from '../server-response-types';
 import { Shape } from './shape';
 import { Track } from './track';
@@ -27,6 +28,8 @@ import { CuboidTrack } from './cuboid-track';
 // eslint-disable-next-line import/no-cycle
 import { SkeletonTrack } from './skeleton-track';
 import { AudioInterval } from './audio-interval';
+// eslint-disable-next-line import/no-cycle
+import { BBoxMaskShape } from './bbox-mask-shape';
 
 export type { BasicInjection, InterpolatedPosition } from './types';
 export { InterpolationNotPossibleError } from './image-object';
@@ -36,7 +39,7 @@ export { Tag } from './tag';
 export { AudioInterval };
 export {
     RectangleShape, EllipseShape, PolygonShape, PolylineShape, PointsShape,
-    CuboidShape, SkeletonShape, MaskShape,
+    CuboidShape, SkeletonShape, MaskShape, BBoxMaskShape,
 };
 export {
     RectangleTrack, EllipseTrack, PolygonTrack, PolylineTrack, PointsTrack,
@@ -49,7 +52,7 @@ export function shapeFactory(
     injection: AnnotationInjection,
 ): Shape {
     const { type } = data;
-    const color = colors[clientID % colors.length];
+    const color = getAnnColor(data.ann_sources, colors, colors[clientID % colors.length]);
 
     let shapeModel = null;
     switch (type) {
@@ -70,6 +73,9 @@ export function shapeFactory(
             break;
         case ShapeType.CUBOID:
             shapeModel = new CuboidShape(data as SerializedShape, clientID, color, injection);
+            break;
+        case ShapeType.BBOX_MASK:
+            shapeModel = new BBoxMaskShape(data as SerializedShape, clientID, color, injection);
             break;
         case ShapeType.MASK:
             shapeModel = new MaskShape(data as SerializedShape, clientID, color, injection);

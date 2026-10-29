@@ -40,6 +40,7 @@ interface Vector2D {
 
 export interface DrawnState {
     clientID: number;
+    parentID?: number;
     outside?: boolean;
     occluded?: boolean;
     hidden?: boolean;
@@ -49,6 +50,7 @@ export interface DrawnState {
     points?: number[];
     rotation: number;
     attributes: Record<number, string>;
+    sourceIdentity?: { fields: Readonly<Record<string, number>> } | null;
     descriptions: string[];
     zOrder?: number;
     pinned?: boolean;

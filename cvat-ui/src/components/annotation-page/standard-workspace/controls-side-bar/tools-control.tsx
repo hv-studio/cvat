@@ -271,7 +271,9 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
     private interaction: {
         id: string | null;
         isAborted: boolean;
-        refinementTarget: { clientID: number; frame: number; points: number[] } | null;
+        refinementTarget: {
+            clientID: number; frame: number; points: number[]; shapeType: ShapeType; redrawID: number;
+        } | null;
         latestPostponedEvent: Event | null;
         latestResponse: {
             rle: Int32Array;
@@ -380,6 +382,8 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
             }
         } else if (!prevProps.isActivated && isActivated) {
             const target = this.pendingRefinementTarget;
+            const geometry = target?.shapeType === ShapeType.BBOX_MASK ?
+                target.elements.find((element) => element.shapeType === ShapeType.MASK) ?? target.elements[0] : target;
             this.pendingRefinementTarget = null;
             // reset flags when start interaction/tracking
             this.interaction = {
@@ -388,7 +392,9 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
                 refinementTarget: target ? {
                     clientID: target.clientID,
                     frame: target.frame,
-                    points: [...target.points],
+                    points: [...geometry.points],
+                    shapeType: geometry.shapeType,
+                    redrawID: geometry.clientID,
                 } : null,
                 latestPostponedEvent: null,
                 latestResponse: [],
@@ -447,22 +453,28 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
         return trackers.filter((tracker: MLModel) => tracker.supportedShapeTypes!.includes(ShapeType.RECTANGLE));
     }
 
-    private getSelectedMask(): ObjectState | null {
+    private getSelectedTarget(): ObjectState | null {
         const { states, selectedStatesID, activatedStateID } = this.props;
         if (this.state.activeInteractor?.id !== 'pth-facebookresearch-sam-vit-h') return null;
         const ids = selectedStatesID.length ? selectedStatesID : [activatedStateID];
         if (ids.length !== 1) return null;
-        return states.find((state) => state.clientID === ids[0] &&
-            state.shapeType === ShapeType.MASK && state.objectType === ObjectType.SHAPE) ?? null;
+        const target = states.find((state) => state.clientID === ids[0] &&
+            state.objectType === ObjectType.SHAPE);
+        if (target?.shapeType === ShapeType.MASK) return target;
+        if (target?.shapeType === ShapeType.BBOX_MASK) return target;
+        return null;
     }
 
     private canStartInteraction(): boolean {
         const { labels, frameData, isActivated } = this.props;
         const { activeInteractor, activeLabelID, fetching } = this.state;
-        const selectedMask = this.getSelectedMask();
+        const selectedTarget = this.getSelectedTarget();
         return !!activeInteractor && activeInteractor.version >= MIN_SUPPORTED_INTERACTOR_VERSION &&
             activeLabelID !== null && !!labels.length && !frameData.deleted && !isActivated && !fetching &&
-            !(selectedMask && (selectedMask.lock || selectedMask.isGroundTruth || selectedMask.hidden));
+            !(selectedTarget && (selectedTarget.lock || selectedTarget.isGroundTruth || selectedTarget.hidden ||
+                selectedTarget.elements.some((element) => (
+                    element.shapeType === ShapeType.MASK && (element.lock || element.hidden)
+                ))));
     }
 
     private startInteraction = (): void => {
@@ -473,12 +485,12 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
             activeInteractor, activeLabelID, startInteractingWithBox, interactorRegionOfInterest,
         } = this.state;
         // Capture the target before canceling Select Objects clears the active canvas mode.
-        const selectedMask = this.getSelectedMask();
+        const selectedTarget = this.getSelectedTarget();
         this.setState({ mode: 'interaction' });
         canvasInstance.cancel();
-        this.pendingRefinementTarget = selectedMask;
-        if (selectedMask) this.setState({ convertMasksToPolygons: false });
-        const startWithBox = !selectedMask && (
+        this.pendingRefinementTarget = selectedTarget;
+        if (selectedTarget) this.setState({ convertMasksToPolygons: false });
+        const startWithBox = !selectedTarget && (
             activeInteractor.params.canvas.startWithBoxOptional ? startInteractingWithBox :
                 activeInteractor.params.canvas.startWithBox ?? false
         );
@@ -489,13 +501,13 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
                 removalStrategy: 'any' as const,
                 points_type: 'any' as const,
                 crosshair: startWithBox,
-                ...(!selectedMask && interactorRegionOfInterest ? {
+                ...(!selectedTarget && interactorRegionOfInterest ? {
                     regionOfInterest: interactorRegionOfInterest,
                 } : {}),
             },
         };
         canvasInstance.interact({ enabled: true, ...parameters });
-        onInteractionStart(activeInteractor, selectedMask?.label.id ?? activeLabelID, parameters);
+        onInteractionStart(activeInteractor, selectedTarget?.label.id ?? activeLabelID, parameters);
     };
 
     private shortcutHandlers = {
@@ -530,7 +542,7 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
         const attachmentBoard = window.document.getElementById('cvat_canvas_attachment_board');
         let regionOfInterest = null;
         if ((activeTab === 'interactors' && toolsPopoverVisible) || (isActivated && mode === 'interaction')) {
-            regionOfInterest = (isActivated ? this.interaction.refinementTarget : this.getSelectedMask()) ?
+            regionOfInterest = (isActivated ? this.interaction.refinementTarget : this.getSelectedTarget()) ?
                 null : interactorRegionOfInterest;
         } else if (activeTab === 'detectors' && toolsPopoverVisible) {
             regionOfInterest = detectorRegionOfInterest;
@@ -716,11 +728,13 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
             interactor,
             data: {
                 frame,
-                obj_bbox: boxes,
+                obj_bbox: refinementTarget?.shapeType === ShapeType.RECTANGLE ?
+                    [refinementTarget.points.slice(0, 2), refinementTarget.points.slice(2, 4)] : boxes,
                 pos_points: posPoints,
                 neg_points: negPoints,
                 interaction_id: this.interaction.id,
-                ...(refinementTarget ? { initial_mask: refinementTarget.points } : {}),
+                ...(refinementTarget?.shapeType === ShapeType.MASK ?
+                    { initial_mask: refinementTarget.points } : {}),
                 ...(!refinementTarget && interactorRegionOfInterest ? { roi: interactorRegionOfInterest } : {}),
             },
         };
@@ -905,7 +919,7 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
         canvasInstance.interact({
             enabled: true,
             command: 'put_shapes',
-            ...(this.interaction.refinementTarget ? { redraw: this.interaction.refinementTarget.clientID } : {}),
+            ...(this.interaction.refinementTarget ? { redraw: this.interaction.refinementTarget.redrawID } : {}),
             payload: {
                 shapes: shapesToBeDrawn,
             },
@@ -1190,8 +1204,25 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
             const [response] = this.interaction.latestResponse;
             if (target && target.frame === frame && refinementTarget.frame === frame &&
                 !target.lock && !target.isGroundTruth && response.rle.length >= 6) {
-                target.points = Array.from(response.rle);
-                await updateAnnotations([target]);
+                const mask = target.shapeType === ShapeType.MASK ? target :
+                    target.elements.find((element) => element.shapeType === ShapeType.MASK);
+                if (mask) {
+                    if (mask.lock || mask.hidden) return;
+                    mask.points = Array.from(response.rle);
+                    await updateAnnotations([mask]);
+                } else if (target.shapeType === ShapeType.BBOX_MASK) {
+                    target.elements = [...target.elements, new core.classes.ObjectState({
+                        objectType: ObjectType.SHAPE,
+                        shapeType: ShapeType.MASK,
+                        frame,
+                        label: target.label,
+                        points: Array.from(response.rle),
+                        zOrder: target.zOrder,
+                        occluded: target.occluded,
+                        source: core.enums.Source.SEMI_AUTO,
+                    })];
+                    await updateAnnotations([target]);
+                }
             }
             return;
         }
@@ -1404,8 +1435,18 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
 
         const minNegVertices = activeInteractor?.params?.canvas?.minNegVertices ?? -1;
         const renderStartWithBox = activeInteractor?.params?.canvas?.startWithBoxOptional ?? false;
-        const selectedMask = this.getSelectedMask();
-        const cannotRefine = selectedMask && (selectedMask.lock || selectedMask.isGroundTruth || selectedMask.hidden);
+        const selectedTarget = this.getSelectedTarget();
+        const cannotRefine = selectedTarget && (
+            selectedTarget.lock || selectedTarget.isGroundTruth || selectedTarget.hidden ||
+                selectedTarget.elements.some((element) => (
+                    element.shapeType === ShapeType.MASK && (element.lock || element.hidden)
+                ))
+        );
+        const hasMask = selectedTarget?.shapeType === ShapeType.MASK ||
+            selectedTarget?.elements.some((element) => element.shapeType === ShapeType.MASK);
+        const targetHint = hasMask ?
+            'Add points to refine its mask. Done updates this object; Esc cancels.' :
+            'Add points to create its mask. Done keeps the source identity; Esc cancels.';
 
         const renderedInteractorExtras = interactorExtras
             .sort((a, b) => a.data.weight - b.data.weight)
@@ -1457,18 +1498,18 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
                     </Col>
                 </Row>
                 <div className='cvat-tools-interactor-setups'>
-                    {selectedMask && (
+                    {selectedTarget && (
                         <Text className='cvat-tools-refinement-target'>
-                            {`Refine object #${selectedMask.clientID}. `}
-                            {cannotRefine ? 'This mask is not editable. Select an unlocked, visible annotation.' :
-                                'Add points to refine its mask. Done updates this object; Esc cancels.'}
+                            {`${hasMask ? 'Refine' : 'Fill mask for'} object #${selectedTarget.clientID}. `}
+                            {cannotRefine ? 'This object is not editable. Select an unlocked, visible annotation.' :
+                                targetHint}
                         </Text>
                     )}
-                    {allowROI && !selectedMask && this.renderROIControls()}
+                    {allowROI && !selectedTarget && this.renderROIControls()}
                     <div>
                         <Switch
-                            checked={!selectedMask && convertMasksToPolygons}
-                            disabled={!!selectedMask}
+                            checked={!selectedTarget && convertMasksToPolygons}
+                            disabled={!!selectedTarget}
                             onChange={(checked: boolean) => {
                                 this.setState({ convertMasksToPolygons: checked });
                             }}
@@ -1478,8 +1519,8 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
                     {renderStartWithBox && (
                         <div>
                             <Switch
-                                checked={!selectedMask && startInteractingWithBox}
-                                disabled={!!selectedMask}
+                                checked={!selectedTarget && startInteractingWithBox}
+                                disabled={!!selectedTarget}
                                 onChange={(value: boolean) => {
                                     localStorage.setItem(startWithBoxStorageItem, value.toString());
                                     this.setState({ startInteractingWithBox: value });
@@ -1642,7 +1683,7 @@ export class ToolsControlComponent extends React.PureComponent<Props, State> {
                         label: 'Interactors',
                         children: (
                             <>
-                                {!this.getSelectedMask() && this.renderLabelBlock()}
+                                {!this.getSelectedTarget() && this.renderLabelBlock()}
                                 {this.renderInteractorBlock()}
                             </>
                         ),

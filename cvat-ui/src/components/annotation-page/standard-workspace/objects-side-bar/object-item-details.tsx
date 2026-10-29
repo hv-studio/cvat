@@ -25,6 +25,7 @@ interface Props {
     sizeParams: SizeParams | null;
     changeSize(sizeType: SizeType, value: number): void;
     source: Source;
+    sourceIdentity?: Readonly<Record<string, number>>;
     score: number;
     votes: number;
     textContent: string;
@@ -88,6 +89,7 @@ function attrAreTheSame(prevProps: Props, nextProps: Props): boolean {
         nextProps.collapsed === prevProps.collapsed &&
         nextProps.attributes === prevProps.attributes &&
         nextProps.source === prevProps.source &&
+        JSON.stringify(nextProps.sourceIdentity) === JSON.stringify(prevProps.sourceIdentity) &&
         nextProps.score === prevProps.score &&
         nextProps.votes === prevProps.votes &&
         nextProps.textContent === prevProps.textContent &&
@@ -101,14 +103,14 @@ function attrAreTheSame(prevProps: Props, nextProps: Props): boolean {
 function ItemAttributesComponent(props: Props): JSX.Element | null {
     const {
         collapsed, attributes, values, readonly, changeAttribute, collapse, mixedAttributeIDs = new Set(),
-        sizeParams, changeSize, source, score, votes, detailsLabel = 'DETAILS',
+        sizeParams, changeSize, source, sourceIdentity, score, votes, detailsLabel = 'DETAILS',
     } = props;
 
     const isConsensus = source === Source.CONSENSUS;
     const withScore = isConsensus;
     const withVotes = isConsensus;
 
-    const hasDetails = attributes.length > 0 || sizeParams !== null;
+    const hasDetails = attributes.length > 0 || sizeParams !== null || !!sourceIdentity;
 
     const baseTooltipAlign = {
         points: ['bl', 'tl'],
@@ -171,6 +173,11 @@ function ItemAttributesComponent(props: Props): JSX.Element | null {
                         </Row>
                     ),
                     children: [
+                        ...Object.entries(sourceIdentity || {}).map(([name, value]) => (
+                            <Row key={`source-${name}`} className='cvat-object-item-source-identity'>
+                                <Text type='secondary'>{`${name}: ${value}`}</Text>
+                            </Row>
+                        )),
                         sizeParams && (
                             <Row key='size' justify='space-around' className='cvat-objects-sidebar-size-params'>
                                 {sizeFields.map((field) => (

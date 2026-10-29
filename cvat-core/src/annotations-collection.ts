@@ -6,7 +6,7 @@
 import _ from 'lodash';
 import {
     shapeFactory, trackFactory, Track, Shape, Tag,
-    MaskShape, BasicInjection, SkeletonShape,
+    MaskShape, BBoxMaskShape, BasicInjection, SkeletonShape,
     SkeletonTrack, PolygonShape, CuboidShape,
     RectangleShape, PolylineShape, PointsShape, EllipseShape,
     InterpolationNotPossibleError, AudioInterval,
@@ -26,52 +26,10 @@ import config from './config';
 import {
     HistoryActions, ShapeType, ObjectType, colors, Source, DimensionType, JobType,
 } from './enums';
-import AnnotationHistory from './annotations-history';
+import AnnotationHistory, { getSaveAction } from './annotations-history';
 
 type AnnotationObject = Shape | Tag | Track | AudioInterval;
 type AnnotationState = ObjectState | AudioIntervalState;
-
-const SAVE_ACTION_BY_PROPERTY: Readonly<Record<string, HistoryActions>> = {
-    label: HistoryActions.CHANGED_LABEL,
-    attributes: HistoryActions.CHANGED_ATTRIBUTES,
-    points: HistoryActions.CHANGED_POINTS,
-    rotation: HistoryActions.CHANGED_ROTATION,
-    outside: HistoryActions.CHANGED_OUTSIDE,
-    occluded: HistoryActions.CHANGED_OCCLUDED,
-    zOrder: HistoryActions.CHANGED_ZORDER,
-    keyframe: HistoryActions.CHANGED_KEYFRAME,
-    lock: HistoryActions.CHANGED_LOCK,
-    pinned: HistoryActions.CHANGED_PINNED,
-    color: HistoryActions.CHANGED_COLOR,
-    hidden: HistoryActions.CHANGED_HIDDEN,
-    position: HistoryActions.CHANGED_AUDIO_POSITION,
-};
-
-function getSaveAction(states: AnnotationState[]): HistoryActions | null {
-    const actions = new Set<HistoryActions>();
-    const collectActions = (state: AnnotationState): void => {
-        Object.entries(state.updateFlags).forEach(([property, updated]) => {
-            if (updated) {
-                actions.add(SAVE_ACTION_BY_PROPERTY[property] ?? HistoryActions.CHANGED_OBJECTS);
-            }
-        });
-        if (state instanceof ObjectState) {
-            state.elements.forEach(collectActions);
-        }
-    };
-    states.forEach(collectActions);
-
-    if (!actions.size) {
-        return null;
-    }
-
-    if (actions.size === 2 &&
-        actions.has(HistoryActions.CHANGED_POINTS) && actions.has(HistoryActions.CHANGED_ROTATION)) {
-        return HistoryActions.CHANGED_ROTATION;
-    }
-
-    return actions.size === 1 ? [...actions][0] : HistoryActions.CHANGED_OBJECTS;
-}
 
 const validateAttributesList = (
     attributes: { spec_id: number, value: string }[],
@@ -193,8 +151,10 @@ export default class Collection {
             dimension: data.dimension,
             jobType: data.jobType,
             nextClientID: () => ++config.globalObjectsCounter,
-            getMasksOnFrame: (frame: number) => (this.shapes[frame] as MaskShape[])
-                .filter((object) => object instanceof MaskShape),
+            getMasksOnFrame: (frame: number) => (this.shapes[frame] || [])
+                .filter((object) => !object.removed)
+                .flatMap((object) => (object instanceof BBoxMaskShape ? object.elements : [object]))
+                .filter((object): object is MaskShape => object instanceof MaskShape),
             replicasCount: data.replicasCount,
         };
     }
@@ -1152,6 +1112,7 @@ export default class Collection {
             cuboid: { shape: 0, track: 0 },
             skeleton: { shape: 0, track: 0 },
             mask: { shape: 0 },
+            bbox_mask: { shape: 0 },
             tag: 0,
             interval: {
                 count: 0,
@@ -1372,6 +1333,7 @@ export default class Collection {
                 if (state.objectType === 'shape') {
                     constructed.shapes.push({
                         attributes,
+                        ann_sources: state.annSources,
                         descriptions: state.descriptions,
                         frame: state.frame,
                         group: state.group?.id ?? 0,
@@ -1386,18 +1348,19 @@ export default class Collection {
                         type: state.shapeType,
                         z_order: state.zOrder,
                         source: state.source,
-                        elements: state.shapeType === 'skeleton' ? state.elements.map((element) => ({
-                            attributes: validateAttributesList(objectAttributesAsList(element)),
-                            frame: element.frame,
-                            group: 0,
-                            label_id: element.label.id,
-                            points: [...element.points],
-                            rotation: 0,
-                            type: element.shapeType,
-                            z_order: 0,
-                            outside: element.outside || false,
-                            occluded: element.occluded || false,
-                        })) : undefined,
+                        elements: [ShapeType.SKELETON, ShapeType.BBOX_MASK].includes(state.shapeType) ?
+                            state.elements.map((element) => ({
+                                attributes: validateAttributesList(objectAttributesAsList(element)),
+                                frame: element.frame,
+                                group: 0,
+                                label_id: element.label.id,
+                                points: [...element.points],
+                                rotation: 0,
+                                type: element.shapeType,
+                                z_order: 0,
+                                outside: element.outside || false,
+                                occluded: element.occluded || false,
+                            })) : undefined,
                     });
                 } else if (state.objectType === 'track') {
                     constructed.tracks.push({
@@ -1630,7 +1593,9 @@ export default class Collection {
 
         let minimumDistance = null;
         let minimumState = null;
-        for (const state of objectStates) {
+        for (const state of objectStates.flatMap((object) => (
+            object.shapeType === ShapeType.BBOX_MASK ? object.elements : [object]
+        ))) {
             checkObjectType('object state', state, null, { cls: ObjectState, name: 'ObjectState' });
             if (state.outside || state.hidden || state.objectType === ObjectType.TAG) {
                 continue;
@@ -1780,7 +1745,12 @@ export default class Collection {
         const ownsTransaction = this.history.beginTransaction(action);
         try {
             states.forEach((state) => {
-                const object = state.clientID === null ? null : this.objects[state.clientID];
+                const parent = state instanceof ObjectState && state.parentID !== null ?
+                    this.objects[state.parentID] : null;
+                let object = state.clientID === null ? null : this.objects[state.clientID];
+                if (parent instanceof BBoxMaskShape) {
+                    object = parent.elements.find((element) => element.clientID === state.clientID);
+                }
                 if (!object) {
                     throw new ArgumentError(`Annotation with client ID ${state.clientID} was not found`);
                 }

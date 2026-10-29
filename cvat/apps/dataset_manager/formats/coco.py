@@ -28,7 +28,11 @@ _REQUIRE_ISCROWD = False
 
 @exporter(name="COCO", ext="ZIP", version="1.0")
 def _export_instances(dst_file, temp_dir, instance_data, save_images=False):
-    with GetCVATDataExtractor(instance_data, include_images=save_images) as extractor:
+    with GetCVATDataExtractor(
+        instance_data,
+        include_images=save_images,
+        format_type="coco_instances",
+    ) as extractor:
         dataset = StreamDataset.from_extractors(extractor, env=dm_env)
         dataset.transform(EllipsesToMasks)
         dataset.export(temp_dir, "coco_instances", save_media=save_images, merge_images=False)

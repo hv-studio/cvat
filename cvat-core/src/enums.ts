@@ -90,6 +90,7 @@ export enum ShapeType {
     CUBOID = 'cuboid',
     SKELETON = 'skeleton',
     MASK = 'mask',
+    BBOX_MASK = 'bbox_mask',
 }
 
 export enum Source {
@@ -154,6 +155,7 @@ export enum HistoryActions {
     CHANGED_HIDDEN_AND_SELECTION = 'Changed hidden and selection',
     CHANGED_SOURCE = 'Changed source',
     CHANGED_SKELETON = 'Changed skeleton',
+    CHANGED_ELEMENTS = 'Changed components',
     CHANGED_AUDIO_POSITION = 'Changed audio position',
     CHANGED_AUDIO_INTERVALS = 'Changed audio intervals',
     CHANGED_SELECTION = 'Changed selection',

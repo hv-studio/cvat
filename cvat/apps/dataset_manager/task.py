@@ -415,10 +415,12 @@ class JobAnnotation:
         def create_shapes(shapes, parent_shape=None):
             db_shapes = []
             db_attr_vals = []
+            db_anns = []
 
             for shape in shapes:
                 attributes = shape.pop("attributes", [])
                 shape_elements = shape.pop("elements", [])
+                ann_sources = shape.pop("ann_sources", None)
                 # FIXME: need to clamp points (be sure that all of them inside the image)
                 # Should we check here or implement a validator?
                 db_shape = models.LabeledShape(job=self.db_job, parent=parent_shape, **shape)
@@ -435,11 +437,23 @@ class JobAnnotation:
                     db_attr_vals.append(db_attr_val)
 
                 db_shapes.append(db_shape)
+                db_anns.append(ann_sources)
                 shape["attributes"] = attributes
+                if ann_sources is not None:
+                    shape["ann_sources"] = ann_sources
                 if shape_elements or parent_shape is None:
                     shape["elements"] = shape_elements
 
             db_shapes = db_utils.bulk_create(models.LabeledShape, db_shapes)
+
+            db_utils.bulk_create(
+                models.LabeledShapeSource,
+                [
+                    models.LabeledShapeSource(shape_id=db_shape.id, data=source)
+                    for db_shape, source in zip(db_shapes, db_anns)
+                    if source is not None
+                ],
+            )
 
             for db_attr_val in db_attr_vals:
                 db_attr_val.shape_id = db_shapes[db_attr_val.shape_id].id
@@ -568,6 +582,20 @@ class JobAnnotation:
 
     def update(self, data):
         data = self._validate_input_annotations(data)
+
+        # Updating an object rebuilds its DB row. Preserve omitted source metadata,
+        # including on skeleton elements; explicit null removes the association.
+        pending = list(data.shapes)
+        omitted = {}
+        while pending:
+            shape = pending.pop()
+            pending.extend(shape.get("elements", []))
+            if shape.get("id") is not None and "ann_sources" not in shape:
+                omitted[shape["id"]] = shape
+        for shape_id, source in models.LabeledShapeSource.objects.filter(
+            shape__job=self.db_job, shape_id__in=omitted
+        ).values_list("shape_id", "data"):
+            omitted[shape_id]["ann_sources"] = source
 
         # in case with "update" must be called prior any annotations in database changes
         # as this annotations are used to count removed/added shapes
@@ -732,7 +760,7 @@ class JobAnnotation:
 
     def _init_shapes_from_db(self, *, streaming: bool = False):
         db_shapes = (
-            dotdict(row)
+            dotdict({**row, "ann_sources": row["ann_sources__data"]})
             for row in self.db_job.labeledshape_set.values(
                 "id",
                 "label_id",
@@ -746,6 +774,7 @@ class JobAnnotation:
                 "z_order",
                 "rotation",
                 "points",
+                "ann_sources__data",
                 "parent",
             )
             .order_by("frame")
@@ -999,6 +1028,7 @@ class JobAnnotation:
         import_mode = AnnotationImportMode(import_mode)
         if import_mode == AnnotationImportMode.REPLACE:
             self.delete()
+            models.TaskAnnSource.objects.filter(task_id=self.db_job.segment.task_id).delete()
         elif import_mode == AnnotationImportMode.APPEND:
             pass
         else:
@@ -1242,6 +1272,7 @@ class TaskAnnotation:
         import_mode = AnnotationImportMode(import_mode)
         if import_mode == AnnotationImportMode.REPLACE:
             self.delete()
+            models.TaskAnnSource.objects.filter(task=self.db_task).delete()
         elif import_mode == AnnotationImportMode.APPEND:
             pass
         else:

@@ -191,7 +191,7 @@ export class SkeletonTrack extends Track {
         return result;
     }
 
-    public get(frame: number): Omit<Required<SerializedData>, 'score' | 'votes'> {
+    public get(frame: number): Omit<Required<SerializedData>, 'score' | 'votes' | 'annSources'> {
         const { prev, next } = this.boundedKeyframes(frame);
         const position = this.getPosition(frame, prev, next);
         const elements = this.elements.map((element) => ({
@@ -261,7 +261,7 @@ export class SkeletonTrack extends Track {
     }
 
     public save(frame: number, data: ObjectState): ObjectState {
-        if (this.lock && data.lock) {
+        if (this.lock && data.lock && !data.elements.some((element) => element.updateFlags.hidden)) {
             return new ObjectState(this.get(frame));
         }
 

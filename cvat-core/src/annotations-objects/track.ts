@@ -85,7 +85,7 @@ export class Track extends Drawn {
         return result;
     }
 
-    public get(frame: number): Omit<Required<SerializedData>, 'elements' | 'score' | 'votes'> {
+    public get(frame: number): Omit<Required<SerializedData>, 'elements' | 'score' | 'votes' | 'annSources'> {
         const {
             prev, next, first, last,
         } = this.boundedKeyframes(frame);
@@ -513,6 +513,11 @@ export class Track extends Drawn {
 
     public save(frame: number, data: ObjectState): ObjectState {
         if (this.lock && data.lock) {
+            // Visibility is a view preference, independent of geometry locking.
+            if (data.updateFlags.hidden) {
+                this.saveHidden(data.hidden, frame);
+                this.updated = Date.now();
+            }
             return new ObjectState(this.get(frame));
         }
 

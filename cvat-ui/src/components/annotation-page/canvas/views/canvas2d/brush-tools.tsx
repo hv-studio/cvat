@@ -68,6 +68,13 @@ const componentShortcuts = {
         scope: ShortcutScope.STANDARD_WORKSPACE_CONTROLS,
         displayWeight: 25,
     },
+    SWITCH_REMOVE_UNDERLYING_PIXELS: {
+        name: 'Remove underlying pixels',
+        description: 'Toggle removing underlying pixels while drawing or editing a mask',
+        sequences: ['shift+q'],
+        scope: ShortcutScope.STANDARD_WORKSPACE_CONTROLS,
+        displayWeight: 30,
+    },
 };
 registerComponentShortcuts(componentShortcuts);
 
@@ -75,9 +82,11 @@ const MIN_BRUSH_SIZE = 1;
 function BrushTools(): React.ReactPortal | null {
     const dispatch = useDispatch();
     const {
-        defaultLabelID, visible, canvasInstance, labels, activeObjectHidden, keyMap, normalizedKeyMap,
+        defaultLabelID, componentDrawing, visible, canvasInstance, labels, activeObjectHidden, keyMap, normalizedKeyMap,
     } = useSelector((state: CombinedState) => ({
-        defaultLabelID: state.annotation.drawing.activeLabelID,
+        defaultLabelID: state.annotation.editing.objectState?.shapeType === ShapeType.BBOX_MASK ?
+            state.annotation.editing.objectState.label.id : state.annotation.drawing.activeLabelID,
+        componentDrawing: state.annotation.editing.objectState?.shapeType === ShapeType.BBOX_MASK,
         visible: state.annotation.canvas.brushTools.visible,
         canvasInstance: state.annotation.canvas.instance,
         labels: state.annotation.job.labels,
@@ -92,6 +101,10 @@ function BrushTools(): React.ReactPortal | null {
     const [[top, left], setTopLeft] = useState([0, 0]);
     const [brushSize, setBrushSize] = useState(10);
     const [applicableLabels, setApplicableLabels] = useState<Label[]>([]);
+    const [removeUnderlyingPixels, setRemoveUnderlyingPixels] = useState(false);
+    const toggleRemoveUnderlyingPixels = useCallback(() => {
+        setRemoveUnderlyingPixels((enabled) => !enabled);
+    }, []);
 
     const [blockedTools, setBlockedTools] = useState<Record<'eraser' | 'polygon-minus', boolean>>({
         eraser: false,
@@ -112,7 +125,7 @@ function BrushTools(): React.ReactPortal | null {
     }, [setCurrentTool, blockedTools['polygon-minus']]);
 
     const hideMask = useCallback((hide: boolean) => {
-        dispatch(changeHideActiveObjectAsync(hide));
+        dispatch(changeHideActiveObjectAsync(hide, false));
     }, []);
 
     const handlers: Record<keyof typeof componentShortcuts, (event?: KeyboardEvent) => void> = {
@@ -120,9 +133,14 @@ function BrushTools(): React.ReactPortal | null {
         ACTIVATE_ERASER_TOOL_STANDARD_CONTROLS: setEraserTool,
         ACTIVATE_POLYGON_TOOL_STANDARD_CONTROLS: setPolygonTool,
         ACTIVATE_POLYGON_REMOVE_TOOL_STANDARD_CONTROLS: setPolygonRemoveTool,
+        SWITCH_REMOVE_UNDERLYING_PIXELS: (event) => {
+            if (visible) {
+                event?.preventDefault();
+                toggleRemoveUnderlyingPixels();
+            }
+        },
     };
 
-    const [removeUnderlyingPixels, setRemoveUnderlyingPixels] = useState(false);
     const dragBar = useDraggable(
         (): number[] => {
             const [element] = window.document.getElementsByClassName('cvat-brush-tools-toolbox');
@@ -291,7 +309,7 @@ function BrushTools(): React.ReactPortal | null {
                     }}
                 />
             </CVATTooltip>
-            {!editableState && (
+            {!editableState && !componentDrawing && (
                 <CVATTooltip title={`Continue ${normalizedKeyMap.SWITCH_REDRAW_MODE_STANDARD_CONTROLS}`}>
                     <Button
                         type='text'
@@ -371,13 +389,15 @@ function BrushTools(): React.ReactPortal | null {
                     <Select.Option value='square'>Square</Select.Option>
                 </Select>
             ) : null}
-            <Button
-                type='text'
-                className={['cvat-brush-tools-underlying-pixels', ...(removeUnderlyingPixels ? ['cvat-brush-tools-active-tool'] : [])].join(' ')}
-                icon={<VerticalAlignBottomOutlined />}
-                onClick={() => setRemoveUnderlyingPixels(!removeUnderlyingPixels)}
-            />
-            <CVATTooltip title={`Hide mask ${normalizedKeyMap.SWITCH_HIDDEN}`}>
+            <CVATTooltip title={`Remove underlying pixels ${normalizedKeyMap.SWITCH_REMOVE_UNDERLYING_PIXELS}`}>
+                <Button
+                    type='text'
+                    className={['cvat-brush-tools-underlying-pixels', ...(removeUnderlyingPixels ? ['cvat-brush-tools-active-tool'] : [])].join(' ')}
+                    icon={<VerticalAlignBottomOutlined />}
+                    onClick={toggleRemoveUnderlyingPixels}
+                />
+            </CVATTooltip>
+            <CVATTooltip title={`Temporarily hide object ${normalizedKeyMap.SWITCH_HIDDEN}`}>
                 <Button
                     type='text'
                     className={['cvat-brush-tools-hide', ...(activeObjectHidden ? ['cvat-brush-tools-active-tool'] : [])].join(' ')}

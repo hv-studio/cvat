@@ -453,7 +453,7 @@ export class CanvasViewImpl implements CanvasView, Listener {
         // the view will not be updated during objects setup if we just set points as is here
         // that is why we need to set points to an empty array (something that can't normally come from CVAT)
         // I do not think it can be easily fixed now, however in the future we should refactor code
-        if (Number.isInteger(state.parentID)) {
+        if (Number.isInteger(state.parentID) && this.drawnStates[state.parentID]) {
             const { elements } = this.drawnStates[state.parentID];
             const drawnElement = elements.find((el) => el.clientID === state.clientID);
             drawnElement.updated = 0;
@@ -1060,6 +1060,7 @@ export class CanvasViewImpl implements CanvasView, Listener {
                 // object has been changed or changed frame for a track
                 if (
                     drawnState.updated !== state.updated ||
+                    drawnState.hidden !== state.hidden ||
                     drawnState.frame !== state.frame ||
                     this.skeletonElementsVisibilityChanged(state)
                 ) {
@@ -1508,10 +1509,14 @@ export class CanvasViewImpl implements CanvasView, Listener {
 
                 this.toggleSkeletonResizer(point, hovered);
             };
+            const activeState = this.controller.objects.find((state: any) => (
+                state.clientID === +shape.attr('clientID')
+            ));
             (shape as any).selectize(value, {
                 deepSelect: true,
                 pointSize: (2 * this.configuration.controlPointsSize) / this.geometry.scale,
-                rotationPoint: shape.type === 'rect' || shape.type === 'ellipse',
+                rotationPoint: (shape.type === 'rect' || shape.type === 'ellipse') &&
+                    !this.isComponent(activeState || {}),
                 pointsExclude: shape.type === 'image' ? ['lt', 'rt', 'rb', 'lb', 't', 'r', 'b', 'l'] : [],
                 pointType(cx: number, cy: number): SVG.Circle {
                     const circle: SVG.Circle = this.nested
@@ -3120,9 +3125,14 @@ export class CanvasViewImpl implements CanvasView, Listener {
         }
     }
 
+    private isComponent(state: any): boolean {
+        return Number.isInteger(state.parentID) && !this.drawnStates[state.parentID];
+    }
+
     private saveState(state: any): DrawnState {
         const result = {
             clientID: state.clientID,
+            parentID: state.parentID,
             outside: state.outside,
             occluded: state.occluded,
             source: state.source,
@@ -3132,6 +3142,7 @@ export class CanvasViewImpl implements CanvasView, Listener {
             points: [...state.points],
             rotation: state.rotation,
             attributes: { ...state.attributes },
+            sourceIdentity: state.sourceIdentity,
             descriptions: [...state.descriptions],
             zOrder: state.zOrder,
             pinned: state.pinned,
@@ -3177,11 +3188,13 @@ export class CanvasViewImpl implements CanvasView, Listener {
             }
         }
         const outlinedColor = parentShapeType === 'skeleton' ? 'black' : outlinedBorders || shapeColor;
+        const filled = (!['polyline', 'points', 'skeleton'].includes(shapeType) || parentShapeType === 'skeleton') &&
+            !(this.isComponent(state) && shapeType === 'rectangle');
 
         return {
             fill: shapeColor,
             stroke: outlinedColor,
-            'fill-opacity': !['polyline', 'points', 'skeleton'].includes(shapeType) || parentShapeType === 'skeleton' ? shapeOpacity : 0,
+            'fill-opacity': filled ? shapeOpacity : 0,
         };
     }
 
@@ -3502,7 +3515,8 @@ export class CanvasViewImpl implements CanvasView, Listener {
             if (drawnState.shapeType === 'mask') {
                 shape.attr('opacity', `${Math.sqrt(this.configuration.shapeOpacity)}`);
             } else {
-                shape.attr('fill-opacity', `${this.configuration.shapeOpacity}`);
+                shape.attr('fill-opacity', this.isComponent(drawnState) && drawnState.shapeType === 'rectangle' ?
+                    0 : this.configuration.shapeOpacity);
             }
 
             if (!drawnState.pinned) {
@@ -3592,7 +3606,8 @@ export class CanvasViewImpl implements CanvasView, Listener {
         if (state.shapeType === 'mask') {
             shape.attr('opacity', `${Math.sqrt(this.configuration.selectedShapeOpacity)}`);
         } else {
-            shape.attr('fill-opacity', `${this.configuration.selectedShapeOpacity}`);
+            shape.attr('fill-opacity', this.isComponent(state) && state.shapeType === 'rectangle' ?
+                0 : this.configuration.selectedShapeOpacity);
         }
 
         if (state.shapeType === 'points') {
@@ -3606,7 +3621,7 @@ export class CanvasViewImpl implements CanvasView, Listener {
             (shape as any).attr('projections', true);
         }
 
-        if (state.shapeType !== 'points') {
+        if (state.shapeType !== 'points' && !(state.shapeType === 'mask' && this.isComponent(state))) {
             this.selectize(true, shape);
         }
 
@@ -4068,7 +4083,14 @@ export class CanvasViewImpl implements CanvasView, Listener {
     }
 
     private updateSelectedObjectsOverlay(): void {
-        const selectedShapes = this.selectedObjects
+        const selectedStates = this.controller.objects.filter((state: any) => (
+            this.selectedObjects.includes(state.clientID)
+        ));
+        const selectedShapes = selectedStates.filter((state: any) => (
+            !(this.isComponent(state) && state.shapeType === 'mask' && selectedStates.some((other: any) => (
+                other.parentID === state.parentID && other.shapeType === 'rectangle' && !other.hidden && !other.outside
+            )))
+        )).map((state: any) => state.clientID)
             .map((clientID: number): SVG.Shape | null => this.svgShapes[clientID] || null)
             .filter((shape: SVG.Shape | null): shape is SVG.Shape => Boolean(shape?.node.isConnected));
 
@@ -4155,7 +4177,10 @@ export class CanvasViewImpl implements CanvasView, Listener {
 
         const title = this.selectedObjectsLabel.querySelector('.cvat_canvas_selected_objects_label_title');
         if (title) {
-            title.textContent = `SELECTION (${this.selectedObjects.length})`;
+            const instances = new Set(selectedStates.map((state: any) => (
+                this.isComponent(state) ? state.parentID : state.clientID
+            )));
+            title.textContent = `SELECTION (${instances.size})`;
         }
         this.selectedObjectsLabel.title = '';
         this.updateSelectedObjectsLabelPosition();
@@ -4379,6 +4404,12 @@ export class CanvasViewImpl implements CanvasView, Listener {
                 `${withSource ? `(${source})` : ''}`).style({
                     'text-transform': 'uppercase',
                 });
+
+                if (withID && state.sourceIdentity) {
+                    for (const [name, value] of Object.entries(state.sourceIdentity.fields)) {
+                        block.tspan(`${name}: ${value}`).attr({ dy: '1.25em', x: 0 });
+                    }
+                }
 
                 if (withLayer) {
                     block

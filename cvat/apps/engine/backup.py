@@ -277,6 +277,7 @@ class _TaskBackupBase(_BackupBase):
             "outside",
             "z_order",
             "points",
+            "ann_sources",
             "rotation",
             "frame",
             "group",
@@ -312,7 +313,12 @@ class _TaskBackupBase(_BackupBase):
                 for attr in shape["attributes"]:
                     _update_attribute(attr, label)
 
-                deque(_prepare_shapes(shape.get("elements", []), label), maxlen=0)
+                deque(
+                    _prepare_shapes(
+                        shape.get("elements", []), label if shape["type"] == "skeleton" else ""
+                    ),
+                    maxlen=0,
+                )
 
                 self._prepare_meta(allowed_fields, shape)
 
@@ -800,6 +806,9 @@ class TaskExporter(_ExporterBase, _TaskBackupBase):
         task["data"] = serialize_data()
         task["jobs"] = serialize_jobs()
 
+        if source := models.TaskAnnSource.objects.filter(task=self._db_task).first():
+            task["ann_sources"] = source.data
+
         target_manifest_file = os.path.join(target_dir, self.MANIFEST_FILENAME)
         zip_object.writestr(target_manifest_file, data=JSONRenderer().render(task))
 
@@ -921,6 +930,7 @@ class TaskImporter(_ImporterBase, _TaskBackupBase):
         self._user_id = user_id
         self._org_id = org_id
         self._manifest, self._annotations, self._annotation_guide, self._assets = self._read_meta()
+        self._ann_sources = self._manifest.pop("ann_sources", None)
         self._version = self._read_version(self._manifest)
         self._labels_mapping = label_mapping
         self._db_task = None
@@ -1286,6 +1296,8 @@ class TaskImporter(_ImporterBase, _TaskBackupBase):
         self._import_task()
         self._import_annotations()
         self._import_annotation_guide()
+        if self._ann_sources is not None:
+            models.TaskAnnSource.objects.create(task=self._db_task, data=self._ann_sources)
         return self._db_task
 
 

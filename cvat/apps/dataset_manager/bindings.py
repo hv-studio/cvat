@@ -74,6 +74,8 @@ CVAT_INTERNAL_ATTRIBUTES = {
     "score",
 }
 
+ANN_SOURCES_ATTRIBUTE = "__cvat_ann_sources"
+
 
 class InstanceLabelData:
     class Attribute(NamedTuple):
@@ -262,6 +264,7 @@ class CommonData(InstanceLabelData):
         outside: bool = False
         id: int | None = None
         score: float = 1.0
+        ann_sources: dict | None = None
 
     class TrackedShape(NamedTuple):
         type: int
@@ -514,6 +517,7 @@ class CommonData(InstanceLabelData):
             source=shape["source"],
             attributes=self._export_attributes(shape["attributes"]),
             elements=[self._export_labeled_shape(element) for element in shape.get("elements", [])],
+            ann_sources=shape.get("ann_sources"),
         )
 
     def _export_shape(self, shape):
@@ -737,7 +741,10 @@ class CommonData(InstanceLabelData):
 
         self._ensure_points_converted_to_floats(_shape)
         _shape["elements"] = [
-            self._import_shape(element, label_id) for element in _shape.get("elements", [])
+            self._import_shape(
+                element, label_id if shape.type == ShapeType.SKELETON else None
+            )
+            for element in _shape.get("elements", [])
         ]
 
         return _shape
@@ -1165,6 +1172,7 @@ class ProjectData(InstanceLabelData):
         subset: str = attrib(default=None)
         outside: bool = attrib(default=False)
         elements: list["ProjectData.LabeledShape"] = attrib(default=[])
+        ann_sources: dict | None = attrib(default=None)
 
     @attrs
     class TrackedShape:
@@ -1457,6 +1465,7 @@ class ProjectData(InstanceLabelData):
                 for element in shape.get("elements", [])
             ],
             task_id=task_id,
+            ann_sources=shape.get("ann_sources"),
         )
 
     def _export_tag(self, tag: dict, task_id: int):
@@ -2364,7 +2373,10 @@ class CvatToDmAnnotationConverter:
                 elements, label=dm_label, attributes=dm_attr, group=dm_group, z_order=shape.z_order
             )
         else:
-            raise Exception("Unknown shape type '%s'" % shape.type)
+            raise CvatExportError(
+                f"Shape type {shape.type!r} is not supported by this format; "
+                "use YTVIS for bbox_mask instances"
+            )
 
         results = []
 
@@ -2529,6 +2541,7 @@ def import_dm_annotations(dm_dataset: dm.Dataset, instance_data: ProjectData | C
                 if score is None:
                     score = 1
 
+                ann_sources = ann.attributes.pop(ANN_SOURCES_ATTRIBUTE, None)
                 attributes = [
                     instance_data.Attribute(name=n, value=str(v)) for n, v in ann.attributes.items()
                 ]
@@ -2623,6 +2636,7 @@ def import_dm_annotations(dm_dataset: dm.Dataset, instance_data: ProjectData | C
                                 attributes=attributes,
                                 elements=elements,
                                 score=score,
+                                ann_sources=ann_sources,
                             )
                         )
                         continue

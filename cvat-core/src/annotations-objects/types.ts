@@ -73,6 +73,7 @@ export interface CommonUpdateFlags {
 }
 
 export interface UpdateFlags extends CommonUpdateFlags {
+    elements?: boolean;
     description?: boolean;
     points?: boolean;
     rotation?: boolean;

@@ -1199,6 +1199,15 @@ class RelatedFile(models.Model):
         ordering = ("id",)
 
 
+class TaskAnnSource(models.Model):
+    """Task-level source metadata, interpreted by its dataset format adapter."""
+
+    task = models.OneToOneField(
+        Task, on_delete=models.CASCADE, primary_key=True, related_name="ann_sources"
+    )
+    data = models.JSONField()
+
+
 class SegmentType(str, Enum):
     RANGE = "range"
     SPECIFIC_FRAMES = "specific_frames"
@@ -1571,6 +1580,7 @@ class ShapeType(str, Enum):
     CUBOID = "cuboid"  # (x0, y0, ..., x7, y7)
     MASK = "mask"  # (rle mask, left, top, right, bottom)
     SKELETON = "skeleton"
+    BBOX_MASK = "bbox_mask"  # Independent rectangle and/or mask elements
 
     @classmethod
     def choices(cls):
@@ -1658,6 +1668,15 @@ class LabeledShape(Annotation, FrameAnnotationMixin, ShapeAnnotationMixin, Score
     parent = models.ForeignKey(
         "self", on_delete=models.DO_NOTHING, null=True, related_name="elements"
     )
+
+
+class LabeledShapeSource(models.Model):
+    """Source metadata associated with a shape independently of its current geometry."""
+
+    shape = models.OneToOneField(
+        LabeledShape, on_delete=models.CASCADE, primary_key=True, related_name="ann_sources"
+    )
+    data = models.JSONField()
 
 
 class LabeledShapeAttributeVal(AttributeVal):

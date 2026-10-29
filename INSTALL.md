@@ -525,9 +525,8 @@ docker exec nuclio-nuclio-pth-facebookresearch-sam-vit-h \
 修正已有标注时，可直接编辑掩码，或用 SAM 生成替代结果，保留原对象所需属性后删除旧形状，避免重复标注。
 操作说明见 [AI Tools](site/content/en/docs/annotation/auto-annotation/ai-tools.md)。
 
-YTVIS 数据需先转换为受支持的逐帧格式，例如 COCO instances；上传图片后，通过 **Import annotations / COCO 1.0**
-导入对应标注，保持文件名和标签一致。SAM 不自动维护跨帧身份，需要另行保存视频、帧和实例 ID 的映射。
-先验证一个小任务的导入、编辑、导出，再批量处理。
+YTVIS 数据可通过 **Import annotations / YTVIS 1.0** 直接导入 Task。
+具体的图片准备、导入、SAM 精修和导出流程见 [YTVIS 标注指南](demos/YTVIS.md)。
 
 ## 8. 日常管理与镜像分享
 
@@ -722,4 +721,4 @@ nuctl delete function pth-facebookresearch-sam-vit-h \
 | 浏览器 SAM 解码失败 | 前后端是否包含自动选型代码、固定函数名是否正确、`/assets/sam/decoder-<type>.onnx` 是否已导出并挂载；替换同名文件后强制刷新 |
 
 修改权重目录后需要重新部署，单纯重启容器不会更新挂载配置。
-COCO 导入失败则检查格式、文件结构和掩码编码；该问题独立于 SAM 部署，不能通过重命名原始 YTVIS 文件解决。
+YTVIS 导入失败时，请检查图片路径、帧数、尺寸和标签，并参照 [YTVIS 标注指南](demos/YTVIS.md)排查。

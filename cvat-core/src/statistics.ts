@@ -25,6 +25,7 @@ type Stats = Readonly<{
     mask: Readonly<{
         shape: number;
     }>;
+    bbox_mask: Readonly<{ shape: number }>;
     tag: number;
     interval: IntervalStat;
     manually: number;

@@ -3,7 +3,7 @@
 //
 // SPDX-License-Identifier: MIT
 
-import { omit } from 'lodash';
+import { cloneDeep, omit } from 'lodash';
 import ObjectState, { type SerializedData } from '../object-state';
 import { ScriptingError } from '../exceptions';
 import { ObjectType, HistoryActions } from '../enums';
@@ -19,6 +19,7 @@ export class Shape extends ScoredMixin(Drawn) {
     public outside: boolean;
     public rotation: number;
     public zOrder: number;
+    protected annSources: SerializedShape['ann_sources'];
 
     constructor(
         data: SerializedShape | SerializedShape['elements'][0],
@@ -32,6 +33,7 @@ export class Shape extends ScoredMixin(Drawn) {
         this.occluded = data.occluded || false;
         this.outside = data.outside || false;
         this.zOrder = data.z_order;
+        this.annSources = cloneDeep(data.ann_sources);
     }
 
     protected withContext(): ReturnType<Drawn['withContext']> & {
@@ -68,6 +70,10 @@ export class Shape extends ScoredMixin(Drawn) {
             result.id = this._serverId;
         }
 
+        if (this.annSources) {
+            result.ann_sources = cloneDeep(this.annSources);
+        }
+
         if (isChildObject(this._parentId)) {
             return omit(result, 'elements');
         }
@@ -92,6 +98,7 @@ export class Shape extends ScoredMixin(Drawn) {
             points: this.points.slice(),
             rotation: this.rotation,
             attributes: Object.fromEntries(this.attributes),
+            annSources: cloneDeep(this.annSources),
             descriptions: [...this.descriptions],
             label: this.label,
             group: this.groupObject,
@@ -253,6 +260,11 @@ export class Shape extends ScoredMixin(Drawn) {
         }
 
         if (this.lock && data.lock) {
+            // Visibility is a view preference, independent of geometry locking.
+            if (data.updateFlags.hidden) {
+                this.saveHidden(data.hidden, frame);
+                this.updated = Date.now();
+            }
             return new ObjectState(this.get(frame));
         }
 
